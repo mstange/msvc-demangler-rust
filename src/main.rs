@@ -199,7 +199,7 @@ impl<'a> ParserState<'a> {
         let symbol = self.read_name()?;
 
         let symbol_type = match self.get().expect("More things expected") {
-            b'0' ... b'5' => {
+            b'0'...b'5' => {
                 // Read a variable.
                 self.read_var_type(StorageClass::empty())?
             }
@@ -207,12 +207,12 @@ impl<'a> ParserState<'a> {
                 let access_class = self.read_func_access_class();
                 let name = self.read_name()?;
                 Type::CXXVFTable(name, access_class)
-            },
+            }
             b'7' => {
                 let access_class = self.read_func_access_class();
                 let name = self.read_name()?;
                 Type::CXXVBTable(name, access_class)
-            },
+            }
             b'Y' => {
                 // Read a non-member function.
                 let _ = self.read_calling_conv()?;
@@ -220,7 +220,7 @@ impl<'a> ParserState<'a> {
                 let return_type = self.read_var_type(storage_class)?;
                 let params = self.read_params()?;
                 Type::NonMemberFunction(params, StorageClass::empty(), Box::new(return_type))
-            },
+            }
             c => {
                 // Read a member function.
                 let _func_lass = self.read_func_class(c)?;
@@ -640,7 +640,10 @@ impl<'a> ParserState<'a> {
             b'P' => Type::Ptr(Box::new(self.read_pointee()?), sc),
             b'Q' => Type::Ptr(Box::new(self.read_pointee()?), StorageClass::CONST),
             b'R' => Type::Ptr(Box::new(self.read_pointee()?), StorageClass::VOLATILE),
-            b'S' => Type::Ptr(Box::new(self.read_pointee()?), StorageClass::CONST | StorageClass::VOLATILE),
+            b'S' => Type::Ptr(
+                Box::new(self.read_pointee()?),
+                StorageClass::CONST | StorageClass::VOLATILE,
+            ),
             b'Y' => self.read_array()?,
             b'X' => Type::Void(sc),
             b'D' => Type::Char(sc),
@@ -814,12 +817,8 @@ impl<'a> Serializer<'a> {
                 self.write_pre(inner)?;
                 return Ok(());
             }
-            &Type::CXXVBTable(_, sc) => {
-                sc
-            },
-            &Type::CXXVFTable(_, sc) => {
-                sc
-            },
+            &Type::CXXVBTable(_, sc) => sc,
+            &Type::CXXVFTable(_, sc) => sc,
             &Type::Ptr(ref inner, storage_class) | &Type::Ref(ref inner, storage_class) => {
                 self.write_pre(inner)?;
 
@@ -980,7 +979,7 @@ impl<'a> Serializer<'a> {
             &Type::CXXVBTable(ref names, _sc) => {
                 self.write_name(names)?;
                 write!(self.w, "{}", "\'}"); // the rest of the "operator"
-            },
+            }
             &Type::Ptr(ref inner, _sc) | &Type::Ref(ref inner, _sc) => {
                 match inner.as_ref() {
                     &Type::MemberFunction(_, _, _)
@@ -1088,11 +1087,15 @@ impl<'a> Serializer<'a> {
                 &Name::Operator(op) => {
                     match op {
                         "ctor" => {
-                            let prev = names.names.iter().nth(1).expect("If there's a ctor, there should be another name in this sequence");
+                            let prev = names.names.iter().nth(1).expect(
+                                "If there's a ctor, there should be another name in this sequence",
+                            );
                             self.write_one_name(prev)?;
                         }
                         "dtor" => {
-                            let prev = names.names.iter().nth(1).expect("If there's a dtor, there should be another name in this sequence");
+                            let prev = names.names.iter().nth(1).expect(
+                                "If there's a dtor, there should be another name in this sequence",
+                            );
                             write!(self.w, "~")?;
                             self.write_one_name(prev)?;
                         }
@@ -1470,10 +1473,7 @@ mod tests {
               "void std::basic_stringstream<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > const &)");
         expect("?str@?$basic_stringstream@GU?$char_traits@G@std@@V?$allocator@G@2@@std@@QBE?AV?$basic_string@GU?$char_traits@G@std@@V?$allocator@G@2@@2@XZ",
               "class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > std::basic_stringstream<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(void)const ");
-        expect(
-            "?_Sync@ios_base@std@@0_NA",
-            "bool std::ios_base::_Sync",
-        );
+        expect("?_Sync@ios_base@std@@0_NA", "bool std::ios_base::_Sync");
         expect("??_U@YAPAXI@Z", "void * operator new[](unsigned int)");
         expect("??_V@YAXPAX@Z", "void operator delete[](void *)");
         expect("??X?$_Complex_base@M@std@@QAEAAV01@ABM@Z",
