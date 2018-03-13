@@ -362,11 +362,11 @@ impl<'a> ParserState<'a> {
                         str::from_utf8(orig)?
                     )));
                 }
-                println!("reading memorized name in position {}", i);
-                println!(
-                    "current list of memorized_names: {:#?}",
-                    self.memorized_names
-                );
+                // println!("reading memorized name in position {}", i);
+                // println!(
+                //     "current list of memorized_names: {:#?}",
+                //     self.memorized_names
+                // );
                 self.memorized_names[i].clone()
             } else if self.consume(b"?$") {
                 // Class template.
@@ -754,7 +754,7 @@ fn demangle<'a>(input: &'a str, flags: DemangleFlags) -> Result<String> {
         memorized_names: Vec::with_capacity(10),
     };
     let parse_result = state.parse()?;
-    // println!("parse_result: {:#?}", parse_result);
+    println!("parse_result: {:#?}", parse_result);
     let mut s = Vec::new();
     {
         let mut serializer = Serializer { flags, w: &mut s };
@@ -949,11 +949,14 @@ impl<'a> Serializer<'a> {
     // Write the "second half" of a given type.
     fn write_post(&mut self, t: &Type) -> SerializeResult<()> {
         match t {
-            &Type::MemberFunction(ref params, sc, _)
-            | &Type::NonMemberFunction(ref params, sc, _) => {
+            &Type::MemberFunction(ref params, sc, ref return_type)
+            | &Type::NonMemberFunction(ref params, sc, ref return_type) => {
                 write!(self.w, "(")?;
                 self.write_params(params)?;
                 write!(self.w, ")")?;
+
+                self.write_post(return_type)?;
+
                 if sc.contains(StorageClass::CONST) {
                     write!(self.w, "const")?;
                     if self.flags == DemangleFlags::LotsOfWhitespace {
@@ -1006,6 +1009,23 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
+    fn write_space_pre(&mut self) -> SerializeResult<()> {
+        if let Some(&c) = self.w.last() {
+            match self.flags {
+                DemangleFlags::LessWhitespace => {
+                    if char::from(c).is_ascii_alphabetic() {
+                        write!(self.w, " ")?;
+                    }
+                }
+                DemangleFlags::LotsOfWhitespace => {
+                    if char::from(c).is_ascii_alphabetic() || c == b'&' || c == b'>' {
+                        write!(self.w, " ")?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
     fn write_space(&mut self) -> SerializeResult<()> {
         if let Some(&c) = self.w.last() {
             match self.flags {
@@ -1042,7 +1062,7 @@ impl<'a> Serializer<'a> {
 
     // Write a name read by read_name().
     fn write_name(&mut self, names: &NameSequence) -> SerializeResult<()> {
-        self.write_space()?;
+        self.write_space_pre()?;
 
         // Print out namespaces or outer class names.
         for name in names.names.iter().rev().take(names.names.len() - 1) {
