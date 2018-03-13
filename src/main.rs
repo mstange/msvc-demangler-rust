@@ -172,6 +172,7 @@ enum Type<'a> {
     Ldouble(StorageClass),
 }
 
+#[derive(Debug)]
 struct ParseResult<'a> {
     symbol: NameSequence<'a>,
     symbol_type: Type<'a>,
@@ -371,6 +372,7 @@ impl<'a> ParserState<'a> {
             } else if self.consume(b"?$") {
                 // Class template.
                 let name = self.read_string()?;
+                self.memorize_string(name);
                 println!("read_string read name {}", str::from_utf8(name)?);
                 let params = self.read_params()?;
                 self.expect(b"@")?; // TODO: Can this be ignored?
@@ -382,11 +384,14 @@ impl<'a> ParserState<'a> {
             } else if self.consume(b"?") {
                 // Overloaded operator.
                 let (op, name) = self.read_operator()?;
-                let template_params = self.read_params()?;
+                // let template_params = self.read_params()?;
+                // if template_params.is_some() {
+                //     self.expect(b"@")?; // TODO: Can this be ignored?
+                // }
                 Name {
                     name_str: name.unwrap_or(b""),
                     op: Some(op),
-                    template_params,
+                    template_params: None,
                 }
             } else {
                 // Non-template functions or classes.
@@ -426,7 +431,7 @@ impl<'a> ParserState<'a> {
 
     fn read_operator(&mut self) -> Result<(&'static str, Option<&'a [u8]>)> {
         let op = self.read_operator_name()?;
-        if self.peek() != Some(b'@') {
+        if self.peek() != Some(b'@') && op != "ctor" && op != "dtor" {
             let op_str = self.read_string()?;
             self.memorize_string(op_str);
             Ok((op, Some(op_str)))
@@ -450,6 +455,7 @@ impl<'a> ParserState<'a> {
             b'8' => "==",
             b'9' => "!=",
             b'A' => "[]",
+            b'B' => "cast", // TODO
             b'C' => "->",
             b'D' => "*",
             b'E' => "++",
@@ -482,10 +488,14 @@ impl<'a> ParserState<'a> {
                 b'4' => "&=",
                 b'5' => "|=",
                 b'6' => "^=",
+                b'F' => "ctor_DefaultClosure", // TODO
+                b'O' => "ctor_CopyingClosure", // TODO
                 b'U' => " new[]",
                 b'V' => " delete[]",
                 b'_' => if self.consume(b"L") {
                     " co_await"
+                } else if self.consume(b"K") {
+                    " CXXLiteralOperatorName" // TODO: read <source-name>, that's the operator name
                 } else {
                     return Err(Error::new(format!(
                         "unknown operator name: {}",
@@ -764,6 +774,7 @@ fn demangle<'a>(input: &'a str) -> Result<String> {
         memorized_names: Vec::with_capacity(10),
     };
     let parse_result = state.parse()?;
+    println!("parse_result: {:#?}", parse_result);
     let mut s = Vec::new();
     serialize(&mut s, &parse_result).unwrap();
     Ok(String::from_utf8(s)?)
@@ -1058,6 +1069,60 @@ fn main() {
     }
 }
 
+  // grammar from MicrosoftMangle.cpp:
+
+  // <mangled-name> ::= ? <name> <type-encoding>
+  // <name> ::= <unscoped-name> {[<named-scope>]+ | [<nested-name>]}? @
+  // <unqualified-name> ::= <operator-name>
+  //                    ::= <ctor-dtor-name>
+  //                    ::= <source-name>
+  //                    ::= <template-name>
+  // <operator-name> ::= ???
+  //                 ::= ?B # cast, the target type is encoded as the return type.
+  // <source-name> ::= <identifier> @
+  //
+  // mangleNestedName: calls into mangle, which is responsible for <mangled-name>, and into mangleUnqualifiedName
+  // <postfix> ::= <unqualified-name> [<postfix>]
+  //           ::= <substitution> [<postfix>]
+  //
+  // <template-name> ::= <unscoped-template-name> <template-args>
+  //                 ::= <substitution>
+  // <unscoped-template-name> ::= ?$ <unqualified-name>
+  // <type-encoding> ::= <function-class> <function-type>
+  //                 ::= <storage-class> <variable-type>
+  // <function-class>  ::= <member-function> E? # E designates a 64-bit 'this'
+  //                                            # pointer. in 64-bit mode *all*
+  //                                            # 'this' pointers are 64-bit.
+  //                   ::= <global-function>
+  // <function-type> ::= <this-cvr-qualifiers> <calling-convention>
+  //                     <return-type> <argument-list> <throw-spec>
+  // <member-function> ::= A # private: near
+  //                   ::= B # private: far
+  //                   ::= C # private: static near
+  //                   ::= D # private: static far
+  //                   ::= E # private: virtual near
+  //                   ::= F # private: virtual far
+  //                   ::= I # protected: near
+  //                   ::= J # protected: far
+  //                   ::= K # protected: static near
+  //                   ::= L # protected: static far
+  //                   ::= M # protected: virtual near
+  //                   ::= N # protected: virtual far
+  //                   ::= Q # public: near
+  //                   ::= R # public: far
+  //                   ::= S # public: static near
+  //                   ::= T # public: static far
+  //                   ::= U # public: virtual near
+  //                   ::= V # public: virtual far
+  // <global-function> ::= Y # global near
+  //                   ::= Z # global far
+  // <storage-class> ::= 0  # private static member
+  //                 ::= 1  # protected static member
+  //                 ::= 2  # public static member
+  //                 ::= 3  # global
+  //                 ::= 4  # static local
+
+
 #[cfg(test)]
 mod tests {
     fn expect(input: &str, reference: &str) {
@@ -1072,6 +1137,8 @@ mod tests {
 
     #[test]
     fn wine_tests() {
+        // expect("?GetInputDataSourceSurface@FilterNodeSoftware@gfx@mozilla@@IAE?AU?$already_AddRefed@VDataSourceSurface@gfx@mozilla@@@@IABU?$IntRectTyped@UUnknownUnits@gfx@mozilla@@@23@W4FormatHint@123@W4ConvolveMatrixEdgeMode@23@PBU523@@Z",
+        //        "mozilla::gfx::FilterNodeSoftware::GetInputDataSourceSurface(unsigned int, const mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits>&, mozilla::gfx::FilterNodeSoftware::FormatHint, mozilla::gfx::ConvolveMatrixEdgeMode, const mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits>*)");
         // expect("??0Klass@std@@AEAA@AEBV01@@Z",
         //        "std::Klass::Klass(class std::Klass const &)");
         // expect("??0?$Klass@V?$Mass@_N@@@std@@QEAA@AEBV01@@Z",
