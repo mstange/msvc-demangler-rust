@@ -138,6 +138,8 @@ enum Type<'a> {
     None,
     MemberFunction(Params<'a>, StorageClass, Box<Type<'a>>),
     NonMemberFunction(Params<'a>, StorageClass, Box<Type<'a>>),
+    CXXVBTable(NameSequence<'a>, StorageClass),
+    CXXVFTable(NameSequence<'a>, StorageClass),
     Ptr(Box<Type<'a>>, StorageClass),
     Ref(Box<Type<'a>>, StorageClass),
     Array(i32, Box<Type<'a>>, StorageClass),
@@ -194,11 +196,19 @@ impl<'a> ParserState<'a> {
 
         // What follows is a main symbol name. This may include
         // namespaces or class names.
-        let symbol = self.read_outermost_name()?;
+        let symbol = self.read_name()?;
 
         let symbol_type = if self.consume(b"3") {
             // Read a variable.
             self.read_var_type(StorageClass::empty())?
+        } else if self.consume(b"7") {
+            let access_class = self.read_func_access_class();
+            let name = self.read_name()?;
+            Type::CXXVBTable(name, access_class)
+        } else if self.consume(b"8") {
+            let access_class = self.read_func_access_class();
+            let name = self.read_name()?;
+            Type::CXXVFTable(name, access_class)
         } else if self.consume(b"Y") {
             // Read a non-member function.
             let _ = self.read_calling_conv()?;
@@ -339,16 +349,6 @@ impl<'a> ParserState<'a> {
 
     // Parses a name in the form of A@B@C@@ which represents C::B::A.
     fn read_name(&mut self) -> Result<NameSequence<'a>> {
-        self.read_name_with_memorize(true)
-    }
-
-    // Parses a name in the form of A@B@C@@ which represents C::B::A.
-    fn read_outermost_name(&mut self) -> Result<NameSequence<'a>> {
-        self.read_name_with_memorize(true)
-    }
-
-    // Parses a name in the form of A@B@C@@ which represents C::B::A.
-    fn read_name_with_memorize(&mut self, do_memorize: bool) -> Result<NameSequence<'a>> {
         println!("read_name on {}", str::from_utf8(self.input)?);
         let mut names = Vec::new();
         while !self.consume(b"@") {
@@ -379,9 +379,7 @@ impl<'a> ParserState<'a> {
                 let _ = mem::replace(&mut self.memorized_names, saved_memorized_names);
                 self.expect(b"@")?; // TODO: Can this be ignored?
                 let name = Name::Template(name, template_params);
-                if do_memorize {
-                    self.memorize_name(&name);
-                }
+                self.memorize_name(&name);
                 name
             } else if self.consume(b"?") {
                 // Overloaded operator.
@@ -390,9 +388,7 @@ impl<'a> ParserState<'a> {
                 // Non-template functions or classes.
                 let name = self.read_string()?;
                 let name = Name::NonTemplate(name);
-                if do_memorize {
-                    self.memorize_name(&name);
-                }
+                self.memorize_name(&name);
                 name
             };
             names.push(name);
@@ -780,10 +776,10 @@ fn demangle<'a>(input: &'a str, flags: DemangleFlags) -> Result<String> {
 //
 // So you cannot construct a result just by appending strings to a result.
 //
-// To deal with this, we split the function into two. self.write_pre(rites
-// the "first half" of type declaration, and self.write_post(rites the
-// "second half". For example, self.write_pre(rites a return type for a
-// function and self.write_post(rites an parameter list.
+// To deal with this, we split the function into two. write_pre() writes
+// the "first half" of type declaration, and write_post() writes the
+// "second half". For example, write_pre() writes a return type for a
+// function and write_post() writes an parameter list.
 struct Serializer<'a> {
     flags: DemangleFlags,
     w: &'a mut Vec<u8>,
@@ -809,6 +805,12 @@ impl<'a> Serializer<'a> {
                 self.write_pre(inner)?;
                 return Ok(());
             }
+            &Type::CXXVBTable(_, sc) => {
+                sc
+            },
+            &Type::CXXVFTable(_, sc) => {
+                sc
+            },
             &Type::Ptr(ref inner, storage_class) | &Type::Ref(ref inner, storage_class) => {
                 self.write_pre(inner)?;
 
@@ -954,8 +956,15 @@ impl<'a> Serializer<'a> {
                 write!(self.w, ")")?;
                 if sc.contains(StorageClass::CONST) {
                     write!(self.w, "const")?;
+                    if self.flags == DemangleFlags::LotsOfWhitespace {
+                        self.write_space()?;
+                    }
                 }
             }
+            &Type::CXXVBTable(ref names, _sc) => {
+                self.write_name(names)?;
+                write!(self.w, "{}", "\'}"); // the rest of the "operator"
+            },
             &Type::Ptr(ref inner, _sc) | &Type::Ref(ref inner, _sc) => {
                 match inner.as_ref() {
                     &Type::MemberFunction(_, _, _)
@@ -1055,8 +1064,8 @@ impl<'a> Serializer<'a> {
                         }
                         "vbtable" => {
                             write!(self.w, "{}", "`vbtable'{for `")?;
-                            self.write_one_name(prev)?;
-                            write!(self.w, "{}", "'}")?;
+                            // The rest will be written by write_post of the
+                            // symbol type.
                         }
                         _ => {
                             // Print out an overloaded operator.
@@ -1136,20 +1145,20 @@ fn main() {
 //                   ::= B # private: far
 //                   ::= C # private: static near
 //                   ::= D # private: static far
-//                   ::= E # private: virtual near
-//                   ::= F # private: virtual far
+//                   ::= E # private: near
+//                   ::= F # private: far
 //                   ::= I # near
 //                   ::= J # far
 //                   ::= K # static near
 //                   ::= L # static far
-//                   ::= M # virtual near
-//                   ::= N # virtual far
+//                   ::= M # near
+//                   ::= N # far
 //                   ::= Q # near
 //                   ::= R # far
 //                   ::= S # static near
 //                   ::= T # static far
-//                   ::= U # virtual near
-//                   ::= V # virtual far
+//                   ::= U # near
+//                   ::= V # far
 // <global-function> ::= Y # global near
 //                   ::= Z # global far
 // <storage-class> ::= 0  # private static member
@@ -1323,8 +1332,10 @@ mod tests {
               "class std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> > & std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> >::operator<<(class std::basic_streambuf<unsigned short,struct std::char_traits<unsigned short> > *)");
         expect("??6?$basic_ostream@GU?$char_traits@G@std@@@std@@QAEAAV01@PBX@Z",
               "class std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> > & std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> >::operator<<(void const *)");
+
         expect("??_8?$basic_fstream@DU?$char_traits@D@std@@@std@@7B?$basic_ostream@DU?$char_traits@D@std@@@1@@",
               "const std::basic_fstream<char,struct std::char_traits<char> >::`vbtable'{for `std::basic_ostream<char,struct std::char_traits<char> >'}");
+
         expect("??_8?$basic_fstream@GU?$char_traits@G@std@@@std@@7B?$basic_istream@GU?$char_traits@G@std@@@1@@",
               "const std::basic_fstream<unsigned short,struct std::char_traits<unsigned short> >::`vbtable'{for `std::basic_istream<unsigned short,struct std::char_traits<unsigned short> >'}");
         expect("??_8?$basic_fstream@GU?$char_traits@G@std@@@std@@7B?$basic_ostream@GU?$char_traits@G@std@@@1@@",
@@ -1358,15 +1369,16 @@ mod tests {
             "class std::basic_istream<char,struct std::char_traits<char> > std::cin",
         );
         expect("?do_get@?$num_get@DV?$istreambuf_iterator@DU?$char_traits@D@std@@@std@@@std@@MBE?AV?$istreambuf_iterator@DU?$char_traits@D@std@@@2@V32@0AAVios_base@2@AAHAAG@Z",
-              "virtual class std::istreambuf_iterator<char,struct std::char_traits<char> > std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,unsigned short &)const ");
+              "class std::istreambuf_iterator<char,struct std::char_traits<char> > std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,unsigned short &)const ");
         expect("?do_get@?$num_get@DV?$istreambuf_iterator@DU?$char_traits@D@std@@@std@@@std@@MBE?AV?$istreambuf_iterator@DU?$char_traits@D@std@@@2@V32@0AAVios_base@2@AAHAAI@Z",
-              "virtual class std::istreambuf_iterator<char,struct std::char_traits<char> > std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,unsigned int &)const ");
+              "class std::istreambuf_iterator<char,struct std::char_traits<char> > std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,unsigned int &)const ");
         expect("?do_get@?$num_get@DV?$istreambuf_iterator@DU?$char_traits@D@std@@@std@@@std@@MBE?AV?$istreambuf_iterator@DU?$char_traits@D@std@@@2@V32@0AAVios_base@2@AAHAAJ@Z",
-              "virtual class std::istreambuf_iterator<char,struct std::char_traits<char> > std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,long &)const ");
+              "class std::istreambuf_iterator<char,struct std::char_traits<char> > std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,long &)const ");
         expect("?do_get@?$num_get@DV?$istreambuf_iterator@DU?$char_traits@D@std@@@std@@@std@@MBE?AV?$istreambuf_iterator@DU?$char_traits@D@std@@@2@V32@0AAVios_base@2@AAHAAK@Z",
-              "virtual class std::istreambuf_iterator<char,struct std::char_traits<char> > std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,unsigned long &)const ");
+              "class std::istreambuf_iterator<char,struct std::char_traits<char> > std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,unsigned long &)const ");
         expect("?do_get@?$num_get@DV?$istreambuf_iterator@DU?$char_traits@D@std@@@std@@@std@@MBE?AV?$istreambuf_iterator@DU?$char_traits@D@std@@@2@V32@0AAVios_base@2@AAHAAM@Z",
-              "virtual class std::istreambuf_iterator<char,struct std::char_traits<char> > std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,float &)const ");
+              "class std::istreambuf_iterator<char,struct std::char_traits<char> > std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,float &)const ");
+
         expect(
             "?_query_new_handler@@YAP6AHI@ZXZ",
             "int (*_query_new_handler(void))(unsigned int)",
@@ -1382,9 +1394,9 @@ mod tests {
         expect("?seekg@?$basic_istream@GU?$char_traits@G@std@@@std@@QAEAAV12@V?$fpos@H@2@@Z",
               "class std::basic_istream<unsigned short,struct std::char_traits<unsigned short> > & std::basic_istream<unsigned short,struct std::char_traits<unsigned short> >::seekg(class std::fpos<int>)");
         expect("?seekoff@?$basic_filebuf@DU?$char_traits@D@std@@@std@@MAE?AV?$fpos@H@2@JW4seekdir@ios_base@2@H@Z",
-              "virtual class std::fpos<int> std::basic_filebuf<char,struct std::char_traits<char> >::seekoff(long,enum std::ios_base::seekdir,int)");
+              "class std::fpos<int> std::basic_filebuf<char,struct std::char_traits<char> >::seekoff(long,enum std::ios_base::seekdir,int)");
         expect("?seekoff@?$basic_filebuf@GU?$char_traits@G@std@@@std@@MAE?AV?$fpos@H@2@JW4seekdir@ios_base@2@H@Z",
-              "virtual class std::fpos<int> std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >::seekoff(long,enum std::ios_base::seekdir,int)");
+              "class std::fpos<int> std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >::seekoff(long,enum std::ios_base::seekdir,int)");
         expect(
             "?set_new_handler@@YAP6AXXZP6AXXZ@Z",
             "void (*set_new_handler(void (*)(void)))(void)",
@@ -1503,7 +1515,7 @@ mod tests {
               "class std::complex<float> & __ptr64 std::operator*=(class std::complex<float> & __ptr64,class std::complex<float> const & __ptr64)");
         expect(
             "?_Doraise@bad_cast@std@@MEBAXXZ",
-            "virtual void std::bad_cast::_Doraise(void)const __ptr64",
+            "void std::bad_cast::_Doraise(void)const __ptr64",
         );
         expect("??$?DM@std@@YA?AV?$complex@M@0@ABMABV10@@Z",
             "class std::complex<float> std::operator*<float>(float const &,class std::complex<float> const &)");
@@ -1511,17 +1523,17 @@ mod tests {
             "double const `double std::_Fabs<double>(class std::complex<double> const & __ptr64,int * __ptr64)'::`29'::_R2");
         expect(
             "?vtordisp_thunk@std@@$4PPPPPPPM@3EAA_NXZ",
-            "[thunk]:virtual bool std::vtordisp_thunk`vtordisp{4294967292,4}' (void) __ptr64",
+            "[thunk]:bool std::vtordisp_thunk`vtordisp{4294967292,4}' (void) __ptr64",
         );
         expect(
             "??_9CView@@$BBII@AE",
             "[thunk]: CView::`vcall'{392,{flat}}' }'",
         );
         expect("?_dispatch@_impl_Engine@SalomeApp@@$R4CE@BA@PPPPPPPM@7AE_NAAVomniCallHandle@@@Z",
-            "[thunk]:virtual bool SalomeApp::_impl_Engine::_dispatch`vtordispex{36,16,4294967292,8}' (class omniCallHandle &)");
+            "[thunk]:bool SalomeApp::_impl_Engine::_dispatch`vtordispex{36,16,4294967292,8}' (class omniCallHandle &)");
         expect(
             "?_Doraise@bad_cast@std@@MEBAXXZ",
-            "virtual void std::bad_cast::_Doraise(void)",
+            "void std::bad_cast::_Doraise(void)",
         );
         expect("??Xstd@@YAAEAV?$complex@M@0@AEAV10@AEBV10@@Z",
               "class std::complex<float> & ptr64 cdecl std::operator*=(class std::complex<float> & ptr64,class std::complex<float> const & ptr64)");
@@ -1531,7 +1543,7 @@ mod tests {
             "class QFuture<void> QtConcurrent::run<void,class Task_Render_Preview>(class Task_Render_Preview * __ptr64,void (Task_Render_Preview::*)(void) __ptr64)");
         expect(
             "??_E?$TStrArray@$$BY0BAA@D$0BA@@@UAEPAXI@Z",
-            "virtual void * TStrArray<char [256],16>::`vector deleting destructor'(unsigned int)",
+            "void * TStrArray<char [256],16>::`vector deleting destructor'(unsigned int)",
         );
     }
 
