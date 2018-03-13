@@ -330,6 +330,8 @@ impl<'a> ParserState<'a> {
     // First 10 strings can be referenced by special names ?0, ?1, ..., ?9.
     // Memorize it.
     fn memorize_name(&mut self, n: &Name<'a>) {
+        // TODO: the contains check does an equality check on the Name enum, which
+        // might do unexpected things in subtle cases. It's not a pure string equality check.
         if self.memorized_names.len() < 10 && !self.memorized_names.contains(n) {
             self.memorized_names.push(n.clone());
         }
@@ -360,15 +362,15 @@ impl<'a> ParserState<'a> {
                         str::from_utf8(orig)?
                     )));
                 }
-                // println!("reading memorized name in position {}", i);
-                // println!("current list of memorized_names: {:#?}", self.memorized_names);
+                println!("reading memorized name in position {}", i);
+                println!("current list of memorized_names: {:#?}", self.memorized_names);
                 self.memorized_names[i].clone()
             } else if self.consume(b"?$") {
                 // Class template.
                 let name = self.read_string()?;
                 // println!("read_string read name {}", str::from_utf8(name)?);
                 // Templates have their own context for backreferences.
-                let saved_memorized_names = mem::replace(&mut self.memorized_names, Vec::new());
+                let saved_memorized_names = mem::replace(&mut self.memorized_names, vec![Name::NonTemplate(name)]);
                 let template_params = self.read_params()?;
                 let _ = mem::replace(&mut self.memorized_names, saved_memorized_names);
                 self.expect(b"@")?; // TODO: Can this be ignored?
@@ -467,6 +469,9 @@ impl<'a> ParserState<'a> {
                 b'4' => "&=",
                 b'5' => "|=",
                 b'6' => "^=",
+                b'7' => "vftable",
+                b'8' => "vbtable",
+                b'9' => "vcall",
                 b'F' => "ctor_DefaultClosure", // TODO
                 b'O' => "ctor_CopyingClosure", // TODO
                 b'U' => " new[]",
@@ -811,6 +816,9 @@ impl<'a> Serializer<'a> {
                     &Type::MemberFunction(_, _, _)
                     | &Type::NonMemberFunction(_, _, _)
                     | &Type::Array(_, _, _) => {
+                        if self.flags == DemangleFlags::LotsOfWhitespace {
+                            self.write_space()?;
+                        }
                         write!(self.w, "(")?;
                     }
                     _ => {}
@@ -819,13 +827,13 @@ impl<'a> Serializer<'a> {
                 match t {
                     &Type::Ptr(_, _) => {
                         if self.flags == DemangleFlags::LotsOfWhitespace {
-                            self.write_space();
+                            self.write_space()?;
                         }
                         write!(self.w, "*")?
                     }
                     &Type::Ref(_, _) => {
                         if self.flags == DemangleFlags::LotsOfWhitespace {
-                            self.write_space();
+                            self.write_space()?;
                         }
                         write!(self.w, "&")?
                     }
@@ -1032,15 +1040,24 @@ impl<'a> Serializer<'a> {
         if let Some(name) = names.names.first() {
             match name {
                 &Name::Operator(op) => {
-                    if op == "ctor" || op == "dtor" {
-                        // Print out ctor or dtor.
-                        if op == "dtor" {
+                    let prev = names.names.iter().nth(1).expect("If there's a ctor or a dtor, there should be another name in this sequence");
+                    match op {
+                        "ctor" => {
+                            self.write_one_name(prev)?;
+                        },
+                         "dtor" => {
                             write!(self.w, "~")?;
+                            self.write_one_name(prev)?;
+                        },
+                        "vbtable" => {
+                            write!(self.w, "{}", "`vbtable'{for `")?;
+                            self.write_one_name(prev)?;
+                            write!(self.w, "{}", "'}")?;
+                        },
+                        _ => {
+                            // Print out an overloaded operator.
+                            write!(self.w, "operator{}", op)?;
                         }
-                        self.write_one_name(names.names.iter().nth(1).expect("If there's a ctor or a dtor, there should be another name in this sequence"))?;
-                    } else {
-                        // Print out an overloaded operator.
-                        write!(self.w, "operator{}", op)?;
                     }
                 }
                 &Name::NonTemplate(ref name) => {
@@ -1059,7 +1076,7 @@ impl<'a> Serializer<'a> {
         write!(self.w, "<")?;
         self.write_params(params)?;
         if let Some(&b'>') = self.w.last() {
-            write!(self.w, " ");
+            write!(self.w, " ")?;
         }
         write!(self.w, ">")?;
         Ok(())
@@ -1117,18 +1134,18 @@ fn main() {
 //                   ::= D # private: static far
 //                   ::= E # private: virtual near
 //                   ::= F # private: virtual far
-//                   ::= I # protected: near
-//                   ::= J # protected: far
-//                   ::= K # protected: static near
-//                   ::= L # protected: static far
-//                   ::= M # protected: virtual near
-//                   ::= N # protected: virtual far
-//                   ::= Q # public: near
-//                   ::= R # public: far
-//                   ::= S # public: static near
-//                   ::= T # public: static far
-//                   ::= U # public: virtual near
-//                   ::= V # public: virtual far
+//                   ::= I # near
+//                   ::= J # far
+//                   ::= K # static near
+//                   ::= L # static far
+//                   ::= M # virtual near
+//                   ::= N # virtual far
+//                   ::= Q # near
+//                   ::= R # far
+//                   ::= S # static near
+//                   ::= T # static far
+//                   ::= U # virtual near
+//                   ::= V # virtual far
 // <global-function> ::= Y # global near
 //                   ::= Z # global far
 // <storage-class> ::= 0  # private static member
@@ -1154,72 +1171,76 @@ mod tests {
         let expect = |input, reference| {
             expect_with_flags(input, reference, ::DemangleFlags::LotsOfWhitespace);
         };
+
+        // In the profiler I'd like to see "mozilla::gfx::FilterNodeSoftware::GetInputDataSourceSurface(unsigned int, const mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits>&, mozilla::gfx::FilterNodeSoftware::FormatHint, mozilla::gfx::ConvolveMatrixEdgeMode, const mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits>*)");
         // expect("?GetInputDataSourceSurface@FilterNodeSoftware@gfx@mozilla@@IAE?AU?$already_AddRefed@VDataSourceSurface@gfx@mozilla@@@@IABU?$IntRectTyped@UUnknownUnits@gfx@mozilla@@@23@W4FormatHint@123@W4ConvolveMatrixEdgeMode@23@PBU523@@Z",
-        //        "mozilla::gfx::FilterNodeSoftware::GetInputDataSourceSurface(unsigned int, const mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits>&, mozilla::gfx::FilterNodeSoftware::FormatHint, mozilla::gfx::ConvolveMatrixEdgeMode, const mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits>*)");
-        expect(
-            "??0Klass@std@@AEAA@AEBV01@@Z",
-            "std::Klass::Klass(class std::Klass const &)",
-        );
-        expect("??0?$Klass@V?$Mass@_N@@@std@@QEAA@AEBV01@@Z",
-               "std::Klass<class Mass<bool> >::Klass<class Mass<bool> >(class std::Klass<class Mass<bool> > const &)");
-        expect(
-            "??0?$Klass@_N@std@@QEAA@AEBV01@@Z",
-            "std::Klass<bool>::Klass<bool>(class std::Klass<bool> const &)",
-        );
+        //        "struct already_AddRefed<class mozilla::gfx::DataSourceSurface> mozilla::gfx::FilterNodeSoftware::GetInputDataSourceSurface(unsigned int,struct mozilla::gfx::IntRectTyped<struct mozilla::gfx::UnknownUnits> const &,enum mozilla::gfx::FilterNodeSoftware::FormatHint,enum mozilla::gfx::ConvolveMatrixEdgeMode,struct mozilla::gfx::IntRectTyped<struct mozilla::gfx::UnknownUnits> const *)");
+        // expect(
+        //     "??0Klass@std@@AEAA@AEBV01@@Z",
+        //     "std::Klass::Klass(class std::Klass const &)",
+        // );
+        // expect("??0?$Klass@V?$Mass@_N@@@std@@QEAA@AEBV01@@Z",
+        //        "std::Klass<class Mass<bool> >::Klass<class Mass<bool> >(class std::Klass<class Mass<bool> > const &)");
+        // expect(
+        //     "??0?$Klass@_N@std@@QEAA@AEBV01@@Z",
+        //     "std::Klass<bool>::Klass<bool>(class std::Klass<bool> const &)",
+        // );
         // expect("??0?$Klass@V?$Mass@_N@btd@@@std@@QEAA@AEBV01@@Z",
         //        "std::Klass::Klass(class std::Klass const &)");
         // expect("??0?$Klass@V?$Mass@_N@std@@@std@@QEAA@AEBV01@@Z",
         //        "std::Klass::Klass(class std::Klass const &)");
-        expect(
-            "??0bad_alloc@std@@QAE@ABV01@@Z",
-            "std::bad_alloc::bad_alloc(class std::bad_alloc const &)",
-        );
-        expect(
-            "??0bad_alloc@std@@QAE@PBD@Z",
-            "std::bad_alloc::bad_alloc(char const *)",
-        );
-        expect(
-            "??0bad_cast@@AAE@PBQBD@Z",
-            "bad_cast::bad_cast(char const * const *)",
-        );
-        expect(
-            "??0bad_cast@@QAE@ABQBD@Z",
-            "bad_cast::bad_cast(char const * const &)",
-        );
-        expect(
-            "??0bad_cast@@QAE@ABV0@@Z",
-            "bad_cast::bad_cast(class bad_cast const &)",
-        );
-        expect(
-            "??0bad_exception@std@@QAE@ABV01@@Z",
-            "std::bad_exception::bad_exception(class std::bad_exception const &)",
-        );
-        expect(
-            "??0bad_exception@std@@QAE@PBD@Z",
-            "std::bad_exception::bad_exception(char const *)",
-        );
-        expect(
-            "??0bad_exception@std@@QAE@PBD@Z",
-            "std::bad_exception::bad_exception(char const *)",
-        );
-        expect("??0?$basic_filebuf@DU?$char_traits@D@std@@@std@@QAE@ABV01@@Z",
-            "std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >(class std::basic_filebuf<char,struct std::char_traits<char> > const &)");
-        expect("??0?$basic_filebuf@DU?$char_traits@D@std@@@std@@QAE@ABV01@@Z",
-            "std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >(class std::basic_filebuf<char,struct std::char_traits<char> > const &)");
-        expect("??0?$basic_filebuf@DU?$char_traits@D@std@@@std@@QAE@PAU_iobuf@@@Z",
-              "std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >(struct _iobuf *)");
-        expect("??0?$basic_filebuf@DU?$char_traits@D@std@@@std@@QAE@W4_Uninitialized@1@@Z",
-            "std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >(enum std::_Uninitialized)");
-        expect("??0?$basic_filebuf@GU?$char_traits@G@std@@@std@@QAE@ABV01@@Z",
-            "std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >(class std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> > const &)");
-        expect("??0?$basic_filebuf@GU?$char_traits@G@std@@@std@@QAE@PAU_iobuf@@@Z",
-              "std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >(struct _iobuf *)");
-        expect("??0?$basic_filebuf@GU?$char_traits@G@std@@@std@@QAE@W4_Uninitialized@1@@Z",
-            "std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >(enum std::_Uninitialized)");
-        expect("??0?$basic_stringstream@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAE@ABV01@@Z",
-            "std::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >(class std::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> > const &)");
+        // expect(
+        //     "??0bad_alloc@std@@QAE@ABV01@@Z",
+        //     "std::bad_alloc::bad_alloc(class std::bad_alloc const &)",
+        // );
+        // expect(
+        //     "??0bad_alloc@std@@QAE@PBD@Z",
+        //     "std::bad_alloc::bad_alloc(char const *)",
+        // );
+        // expect(
+        //     "??0bad_cast@@AAE@PBQBD@Z",
+        //     "bad_cast::bad_cast(char const * const *)",
+        // );
+        // expect(
+        //     "??0bad_cast@@QAE@ABQBD@Z",
+        //     "bad_cast::bad_cast(char const * const &)",
+        // );
+        // expect(
+        //     "??0bad_cast@@QAE@ABV0@@Z",
+        //     "bad_cast::bad_cast(class bad_cast const &)",
+        // );
+        // expect(
+        //     "??0bad_exception@std@@QAE@ABV01@@Z",
+        //     "std::bad_exception::bad_exception(class std::bad_exception const &)",
+        // );
+        // expect(
+        //     "??0bad_exception@std@@QAE@PBD@Z",
+        //     "std::bad_exception::bad_exception(char const *)",
+        // );
+        // expect(
+        //     "??0bad_exception@std@@QAE@PBD@Z",
+        //     "std::bad_exception::bad_exception(char const *)",
+        // );
+        // expect("??0?$basic_filebuf@DU?$char_traits@D@std@@@std@@QAE@ABV01@@Z",
+        //     "std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >(class std::basic_filebuf<char,struct std::char_traits<char> > const &)");
+        // expect("??0?$basic_filebuf@DU?$char_traits@D@std@@@std@@QAE@ABV01@@Z",
+        //     "std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >(class std::basic_filebuf<char,struct std::char_traits<char> > const &)");
+        // expect("??0?$basic_filebuf@DU?$char_traits@D@std@@@std@@QAE@PAU_iobuf@@@Z",
+        //       "std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >(struct _iobuf *)");
+        // expect("??0?$basic_filebuf@DU?$char_traits@D@std@@@std@@QAE@W4_Uninitialized@1@@Z",
+        //     "std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >(enum std::_Uninitialized)");
+        // expect("??0?$basic_filebuf@GU?$char_traits@G@std@@@std@@QAE@ABV01@@Z",
+        //     "std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >(class std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> > const &)");
+        // expect("??0?$basic_filebuf@GU?$char_traits@G@std@@@std@@QAE@PAU_iobuf@@@Z",
+        //       "std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >(struct _iobuf *)");
+        // expect("??0?$basic_filebuf@GU?$char_traits@G@std@@@std@@QAE@W4_Uninitialized@1@@Z",
+        //     "std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >(enum std::_Uninitialized)");
+        // expect("??0?$basic_stringstream@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAE@ABV01@@Z",
+        //     "std::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >(class std::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> > const &)");
+
         expect("??0?$basic_stringstream@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAE@ABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@1@H@Z",
             "std::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >(class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > const &,int)");
+
         expect("??0?$basic_stringstream@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAE@H@Z",
               "std::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >(int)");
         expect("??0?$basic_stringstream@GU?$char_traits@G@std@@V?$allocator@G@2@@std@@QAE@ABV01@@Z",
@@ -1250,7 +1271,7 @@ mod tests {
         );
         expect(
             "??0strstreambuf@@QAE@P6APAXJ@ZP6AXPAX@Z@Z",
-            "strstreambuf::strstreambuf(void * (__cdecl*)(long),void (__cdecl*)(void *))",
+            "strstreambuf::strstreambuf(void * (*)(long),void (*)(void *))",
         );
         expect(
             "??0strstreambuf@@QAE@PADH0@Z",
@@ -1266,36 +1287,36 @@ mod tests {
         );
         expect(
             "??1__non_rtti_object@std@@UAE@XZ",
-            "public: virtual __thiscall std::__non_rtti_object::~__non_rtti_object(void)",
+            "std::__non_rtti_object::~__non_rtti_object(void)",
         );
         expect(
             "??1__non_rtti_object@@UAE@XZ",
-            "public: virtual __thiscall __non_rtti_object::~__non_rtti_object(void)",
+            "__non_rtti_object::~__non_rtti_object(void)",
         );
         expect("??1?$num_get@DV?$istreambuf_iterator@DU?$char_traits@D@std@@@std@@@std@@UAE@XZ",
-              "public: virtual __thiscall std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::~num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >(void)");
+              "std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::~num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >(void)");
         expect("??1?$num_get@GV?$istreambuf_iterator@GU?$char_traits@G@std@@@std@@@std@@UAE@XZ",
-              "public: virtual __thiscall std::num_get<unsigned short,class std::istreambuf_iterator<unsigned short,struct std::char_traits<unsigned short> > >::~num_get<unsigned short,class std::istreambuf_iterator<unsigned short,struct std::char_traits<unsigned short> > >(void)");
+              "std::num_get<unsigned short,class std::istreambuf_iterator<unsigned short,struct std::char_traits<unsigned short> > >::~num_get<unsigned short,class std::istreambuf_iterator<unsigned short,struct std::char_traits<unsigned short> > >(void)");
         expect("??4istream_withassign@@QAEAAV0@ABV0@@Z",
-              "public: class istream_withassign & __thiscall istream_withassign::operator=(class istream_withassign const &)");
+              "class istream_withassign & istream_withassign::operator=(class istream_withassign const &)");
         expect("??4istream_withassign@@QAEAAVistream@@ABV1@@Z",
-              "public: class istream & __thiscall istream_withassign::operator=(class istream const &)");
+              "class istream & istream_withassign::operator=(class istream const &)");
         expect(
             "??4istream_withassign@@QAEAAVistream@@PAVstreambuf@@@Z",
-            "public: class istream & __thiscall istream_withassign::operator=(class streambuf *)",
+            "class istream & istream_withassign::operator=(class streambuf *)",
         );
         expect("??5std@@YAAAV?$basic_istream@DU?$char_traits@D@std@@@0@AAV10@AAC@Z",
-              "class std::basic_istream<char,struct std::char_traits<char> > & __cdecl std::operator>>(class std::basic_istream<char,struct std::char_traits<char> > &,signed char &)");
+              "class std::basic_istream<char,struct std::char_traits<char> > & std::operator>>(class std::basic_istream<char,struct std::char_traits<char> > &,signed char &)");
         expect("??5std@@YAAAV?$basic_istream@DU?$char_traits@D@std@@@0@AAV10@AAD@Z",
-              "class std::basic_istream<char,struct std::char_traits<char> > & __cdecl std::operator>>(class std::basic_istream<char,struct std::char_traits<char> > &,char &)");
+              "class std::basic_istream<char,struct std::char_traits<char> > & std::operator>>(class std::basic_istream<char,struct std::char_traits<char> > &,char &)");
         expect("??5std@@YAAAV?$basic_istream@DU?$char_traits@D@std@@@0@AAV10@AAE@Z",
-              "class std::basic_istream<char,struct std::char_traits<char> > & __cdecl std::operator>>(class std::basic_istream<char,struct std::char_traits<char> > &,unsigned char &)");
+              "class std::basic_istream<char,struct std::char_traits<char> > & std::operator>>(class std::basic_istream<char,struct std::char_traits<char> > &,unsigned char &)");
         expect("??6?$basic_ostream@GU?$char_traits@G@std@@@std@@QAEAAV01@P6AAAVios_base@1@AAV21@@Z@Z",
-              "public: class std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> > & __thiscall std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> >::operator<<(class std::ios_base & (__cdecl*)(class std::ios_base &))");
+              "class std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> > & std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> >::operator<<(class std::ios_base & (*)(class std::ios_base &))");
         expect("??6?$basic_ostream@GU?$char_traits@G@std@@@std@@QAEAAV01@PAV?$basic_streambuf@GU?$char_traits@G@std@@@1@@Z",
-              "public: class std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> > & __thiscall std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> >::operator<<(class std::basic_streambuf<unsigned short,struct std::char_traits<unsigned short> > *)");
+              "class std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> > & std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> >::operator<<(class std::basic_streambuf<unsigned short,struct std::char_traits<unsigned short> > *)");
         expect("??6?$basic_ostream@GU?$char_traits@G@std@@@std@@QAEAAV01@PBX@Z",
-              "public: class std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> > & __thiscall std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> >::operator<<(void const *)");
+              "class std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> > & std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> >::operator<<(void const *)");
         expect("??_8?$basic_fstream@DU?$char_traits@D@std@@@std@@7B?$basic_ostream@DU?$char_traits@D@std@@@1@@",
               "const std::basic_fstream<char,struct std::char_traits<char> >::`vbtable'{for `std::basic_ostream<char,struct std::char_traits<char> >'}");
         expect("??_8?$basic_fstream@GU?$char_traits@G@std@@@std@@7B?$basic_istream@GU?$char_traits@G@std@@@1@@",
@@ -1303,129 +1324,129 @@ mod tests {
         expect("??_8?$basic_fstream@GU?$char_traits@G@std@@@std@@7B?$basic_ostream@GU?$char_traits@G@std@@@1@@",
               "const std::basic_fstream<unsigned short,struct std::char_traits<unsigned short> >::`vbtable'{for `std::basic_ostream<unsigned short,struct std::char_traits<unsigned short> >'}");
         expect("??9std@@YA_NPBDABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@0@@Z",
-              "bool __cdecl std::operator!=(char const *,class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > const &)");
+              "bool std::operator!=(char const *,class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > const &)");
         expect("??9std@@YA_NPBGABV?$basic_string@GU?$char_traits@G@std@@V?$allocator@G@2@@0@@Z",
-              "bool __cdecl std::operator!=(unsigned short const *,class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > const &)");
+              "bool std::operator!=(unsigned short const *,class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > const &)");
         expect("??A?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAEAADI@Z",
-              "public: char & __thiscall std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> >::operator[](unsigned int)");
+              "char & std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> >::operator[](unsigned int)");
         expect("??A?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QBEABDI@Z",
-              "public: char const & __thiscall std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> >::operator[](unsigned int)const ");
+              "char const & std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> >::operator[](unsigned int)const ");
         expect("??A?$basic_string@GU?$char_traits@G@std@@V?$allocator@G@2@@std@@QAEAAGI@Z",
-              "public: unsigned short & __thiscall std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::operator[](unsigned int)");
+              "unsigned short & std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::operator[](unsigned int)");
         expect("??A?$basic_string@GU?$char_traits@G@std@@V?$allocator@G@2@@std@@QBEABGI@Z",
-              "public: unsigned short const & __thiscall std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::operator[](unsigned int)const ");
+              "unsigned short const & std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::operator[](unsigned int)const ");
         expect(
             "?abs@std@@YAMABV?$complex@M@1@@Z",
-            "float __cdecl std::abs(class std::complex<float> const &)",
+            "float std::abs(class std::complex<float> const &)",
         );
         expect(
             "?abs@std@@YANABV?$complex@N@1@@Z",
-            "double __cdecl std::abs(class std::complex<double> const &)",
+            "double std::abs(class std::complex<double> const &)",
         );
         expect(
             "?abs@std@@YAOABV?$complex@O@1@@Z",
-            "long double __cdecl std::abs(class std::complex<long double> const &)",
+            "long double std::abs(class std::complex<long double> const &)",
         );
         expect(
             "?cin@std@@3V?$basic_istream@DU?$char_traits@D@std@@@1@A",
             "class std::basic_istream<char,struct std::char_traits<char> > std::cin",
         );
         expect("?do_get@?$num_get@DV?$istreambuf_iterator@DU?$char_traits@D@std@@@std@@@std@@MBE?AV?$istreambuf_iterator@DU?$char_traits@D@std@@@2@V32@0AAVios_base@2@AAHAAG@Z",
-              "protected: virtual class std::istreambuf_iterator<char,struct std::char_traits<char> > __thiscall std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,unsigned short &)const ");
+              "virtual class std::istreambuf_iterator<char,struct std::char_traits<char> > std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,unsigned short &)const ");
         expect("?do_get@?$num_get@DV?$istreambuf_iterator@DU?$char_traits@D@std@@@std@@@std@@MBE?AV?$istreambuf_iterator@DU?$char_traits@D@std@@@2@V32@0AAVios_base@2@AAHAAI@Z",
-              "protected: virtual class std::istreambuf_iterator<char,struct std::char_traits<char> > __thiscall std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,unsigned int &)const ");
+              "virtual class std::istreambuf_iterator<char,struct std::char_traits<char> > std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,unsigned int &)const ");
         expect("?do_get@?$num_get@DV?$istreambuf_iterator@DU?$char_traits@D@std@@@std@@@std@@MBE?AV?$istreambuf_iterator@DU?$char_traits@D@std@@@2@V32@0AAVios_base@2@AAHAAJ@Z",
-              "protected: virtual class std::istreambuf_iterator<char,struct std::char_traits<char> > __thiscall std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,long &)const ");
+              "virtual class std::istreambuf_iterator<char,struct std::char_traits<char> > std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,long &)const ");
         expect("?do_get@?$num_get@DV?$istreambuf_iterator@DU?$char_traits@D@std@@@std@@@std@@MBE?AV?$istreambuf_iterator@DU?$char_traits@D@std@@@2@V32@0AAVios_base@2@AAHAAK@Z",
-              "protected: virtual class std::istreambuf_iterator<char,struct std::char_traits<char> > __thiscall std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,unsigned long &)const ");
+              "virtual class std::istreambuf_iterator<char,struct std::char_traits<char> > std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,unsigned long &)const ");
         expect("?do_get@?$num_get@DV?$istreambuf_iterator@DU?$char_traits@D@std@@@std@@@std@@MBE?AV?$istreambuf_iterator@DU?$char_traits@D@std@@@2@V32@0AAVios_base@2@AAHAAM@Z",
-              "protected: virtual class std::istreambuf_iterator<char,struct std::char_traits<char> > __thiscall std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,float &)const ");
+              "virtual class std::istreambuf_iterator<char,struct std::char_traits<char> > std::num_get<char,class std::istreambuf_iterator<char,struct std::char_traits<char> > >::do_get(class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::istreambuf_iterator<char,struct std::char_traits<char> >,class std::ios_base &,int &,float &)const ");
         expect(
             "?_query_new_handler@@YAP6AHI@ZXZ",
-            "int (__cdecl*__cdecl _query_new_handler(void))(unsigned int)",
+            "int (*_query_new_handler(void))(unsigned int)",
         );
         expect("?register_callback@ios_base@std@@QAEXP6AXW4event@12@AAV12@H@ZH@Z",
-              "public: void __thiscall std::ios_base::register_callback(void (__cdecl*)(enum std::ios_base::event,class std::ios_base &,int),int)");
+              "void std::ios_base::register_callback(void (*)(enum std::ios_base::event,class std::ios_base &,int),int)");
         expect("?seekg@?$basic_istream@DU?$char_traits@D@std@@@std@@QAEAAV12@JW4seekdir@ios_base@2@@Z",
-              "public: class std::basic_istream<char,struct std::char_traits<char> > & __thiscall std::basic_istream<char,struct std::char_traits<char> >::seekg(long,enum std::ios_base::seekdir)");
+              "class std::basic_istream<char,struct std::char_traits<char> > & std::basic_istream<char,struct std::char_traits<char> >::seekg(long,enum std::ios_base::seekdir)");
         expect("?seekg@?$basic_istream@DU?$char_traits@D@std@@@std@@QAEAAV12@V?$fpos@H@2@@Z",
-              "public: class std::basic_istream<char,struct std::char_traits<char> > & __thiscall std::basic_istream<char,struct std::char_traits<char> >::seekg(class std::fpos<int>)");
+              "class std::basic_istream<char,struct std::char_traits<char> > & std::basic_istream<char,struct std::char_traits<char> >::seekg(class std::fpos<int>)");
         expect("?seekg@?$basic_istream@GU?$char_traits@G@std@@@std@@QAEAAV12@JW4seekdir@ios_base@2@@Z",
-              "public: class std::basic_istream<unsigned short,struct std::char_traits<unsigned short> > & __thiscall std::basic_istream<unsigned short,struct std::char_traits<unsigned short> >::seekg(long,enum std::ios_base::seekdir)");
+              "class std::basic_istream<unsigned short,struct std::char_traits<unsigned short> > & std::basic_istream<unsigned short,struct std::char_traits<unsigned short> >::seekg(long,enum std::ios_base::seekdir)");
         expect("?seekg@?$basic_istream@GU?$char_traits@G@std@@@std@@QAEAAV12@V?$fpos@H@2@@Z",
-              "public: class std::basic_istream<unsigned short,struct std::char_traits<unsigned short> > & __thiscall std::basic_istream<unsigned short,struct std::char_traits<unsigned short> >::seekg(class std::fpos<int>)");
+              "class std::basic_istream<unsigned short,struct std::char_traits<unsigned short> > & std::basic_istream<unsigned short,struct std::char_traits<unsigned short> >::seekg(class std::fpos<int>)");
         expect("?seekoff@?$basic_filebuf@DU?$char_traits@D@std@@@std@@MAE?AV?$fpos@H@2@JW4seekdir@ios_base@2@H@Z",
-              "protected: virtual class std::fpos<int> __thiscall std::basic_filebuf<char,struct std::char_traits<char> >::seekoff(long,enum std::ios_base::seekdir,int)");
+              "virtual class std::fpos<int> std::basic_filebuf<char,struct std::char_traits<char> >::seekoff(long,enum std::ios_base::seekdir,int)");
         expect("?seekoff@?$basic_filebuf@GU?$char_traits@G@std@@@std@@MAE?AV?$fpos@H@2@JW4seekdir@ios_base@2@H@Z",
-              "protected: virtual class std::fpos<int> __thiscall std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >::seekoff(long,enum std::ios_base::seekdir,int)");
+              "virtual class std::fpos<int> std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >::seekoff(long,enum std::ios_base::seekdir,int)");
         expect(
             "?set_new_handler@@YAP6AXXZP6AXXZ@Z",
-            "void (__cdecl*__cdecl set_new_handler(void (__cdecl*)(void)))(void)",
+            "void (*set_new_handler(void (*)(void)))(void)",
         );
         expect("?str@?$basic_istringstream@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAEXABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@2@@Z",
-              "public: void __thiscall std::basic_istringstream<char,struct std::char_traits<char>,class std::allocator<char> >::str(class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > const &)");
+              "void std::basic_istringstream<char,struct std::char_traits<char>,class std::allocator<char> >::str(class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > const &)");
         expect("?str@?$basic_istringstream@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QBE?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@2@XZ",
-              "public: class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > __thiscall std::basic_istringstream<char,struct std::char_traits<char>,class std::allocator<char> >::str(void)const ");
+              "class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > std::basic_istringstream<char,struct std::char_traits<char>,class std::allocator<char> >::str(void)const ");
         expect("?str@?$basic_istringstream@GU?$char_traits@G@std@@V?$allocator@G@2@@std@@QAEXABV?$basic_string@GU?$char_traits@G@std@@V?$allocator@G@2@@2@@Z",
-              "public: void __thiscall std::basic_istringstream<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > const &)");
+              "void std::basic_istringstream<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > const &)");
         expect("?str@?$basic_istringstream@GU?$char_traits@G@std@@V?$allocator@G@2@@std@@QBE?AV?$basic_string@GU?$char_traits@G@std@@V?$allocator@G@2@@2@XZ",
-              "public: class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > __thiscall std::basic_istringstream<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(void)const ");
+              "class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > std::basic_istringstream<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(void)const ");
         expect("?str@?$basic_ostringstream@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAEXABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@2@@Z",
-              "public: void __thiscall std::basic_ostringstream<char,struct std::char_traits<char>,class std::allocator<char> >::str(class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > const &)");
+              "void std::basic_ostringstream<char,struct std::char_traits<char>,class std::allocator<char> >::str(class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > const &)");
         expect("?str@?$basic_ostringstream@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QBE?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@2@XZ",
-              "public: class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > __thiscall std::basic_ostringstream<char,struct std::char_traits<char>,class std::allocator<char> >::str(void)const ");
+              "class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > std::basic_ostringstream<char,struct std::char_traits<char>,class std::allocator<char> >::str(void)const ");
         expect("?str@?$basic_ostringstream@GU?$char_traits@G@std@@V?$allocator@G@2@@std@@QAEXABV?$basic_string@GU?$char_traits@G@std@@V?$allocator@G@2@@2@@Z",
-              "public: void __thiscall std::basic_ostringstream<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > const &)");
+              "void std::basic_ostringstream<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > const &)");
         expect("?str@?$basic_ostringstream@GU?$char_traits@G@std@@V?$allocator@G@2@@std@@QBE?AV?$basic_string@GU?$char_traits@G@std@@V?$allocator@G@2@@2@XZ",
-              "public: class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > __thiscall std::basic_ostringstream<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(void)const ");
+              "class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > std::basic_ostringstream<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(void)const ");
         expect("?str@?$basic_stringbuf@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAEXABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@2@@Z",
-              "public: void __thiscall std::basic_stringbuf<char,struct std::char_traits<char>,class std::allocator<char> >::str(class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > const &)");
+              "void std::basic_stringbuf<char,struct std::char_traits<char>,class std::allocator<char> >::str(class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > const &)");
         expect("?str@?$basic_stringbuf@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QBE?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@2@XZ",
-              "public: class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > __thiscall std::basic_stringbuf<char,struct std::char_traits<char>,class std::allocator<char> >::str(void)const ");
+              "class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > std::basic_stringbuf<char,struct std::char_traits<char>,class std::allocator<char> >::str(void)const ");
         expect("?str@?$basic_stringbuf@GU?$char_traits@G@std@@V?$allocator@G@2@@std@@QAEXABV?$basic_string@GU?$char_traits@G@std@@V?$allocator@G@2@@2@@Z",
-              "public: void __thiscall std::basic_stringbuf<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > const &)");
+              "void std::basic_stringbuf<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > const &)");
         expect("?str@?$basic_stringbuf@GU?$char_traits@G@std@@V?$allocator@G@2@@std@@QBE?AV?$basic_string@GU?$char_traits@G@std@@V?$allocator@G@2@@2@XZ",
-              "public: class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > __thiscall std::basic_stringbuf<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(void)const ");
+              "class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > std::basic_stringbuf<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(void)const ");
         expect("?str@?$basic_stringstream@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAEXABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@2@@Z",
-              "public: void __thiscall std::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >::str(class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > const &)");
+              "void std::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >::str(class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > const &)");
         expect("?str@?$basic_stringstream@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QBE?AV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@2@XZ",
-              "public: class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > __thiscall std::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >::str(void)const ");
+              "class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > std::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >::str(void)const ");
         expect("?str@?$basic_stringstream@GU?$char_traits@G@std@@V?$allocator@G@2@@std@@QAEXABV?$basic_string@GU?$char_traits@G@std@@V?$allocator@G@2@@2@@Z",
-              "public: void __thiscall std::basic_stringstream<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > const &)");
+              "void std::basic_stringstream<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > const &)");
         expect("?str@?$basic_stringstream@GU?$char_traits@G@std@@V?$allocator@G@2@@std@@QBE?AV?$basic_string@GU?$char_traits@G@std@@V?$allocator@G@2@@2@XZ",
-              "public: class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > __thiscall std::basic_stringstream<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(void)const ");
+              "class std::basic_string<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> > std::basic_stringstream<unsigned short,struct std::char_traits<unsigned short>,class std::allocator<unsigned short> >::str(void)const ");
         expect(
             "?_Sync@ios_base@std@@0_NA",
             "private: static bool std::ios_base::_Sync",
         );
         expect(
             "??_U@YAPAXI@Z",
-            "void * __cdecl operator new[](unsigned int)",
+            "void * operator new[](unsigned int)",
         );
-        expect("??_V@YAXPAX@Z", "void __cdecl operator delete[](void *)");
+        expect("??_V@YAXPAX@Z", "void operator delete[](void *)");
         expect("??X?$_Complex_base@M@std@@QAEAAV01@ABM@Z",
-              "public: class std::_Complex_base<float> & __thiscall std::_Complex_base<float>::operator*=(float const &)");
+              "class std::_Complex_base<float> & std::_Complex_base<float>::operator*=(float const &)");
         expect("??Xstd@@YAAAV?$complex@M@0@AAV10@ABV10@@Z",
-              "class std::complex<float> & __cdecl std::operator*=(class std::complex<float> &,class std::complex<float> const &)");
-        expect("?aaa@@YAHAAUbbb@@@Z", "int __cdecl aaa(struct bbb &)");
+              "class std::complex<float> & std::operator*=(class std::complex<float> &,class std::complex<float> const &)");
+        expect("?aaa@@YAHAAUbbb@@@Z", "int aaa(struct bbb &)");
         expect(
             "?aaa@@YAHBAUbbb@@@Z",
-            "int __cdecl aaa(struct bbb & volatile)",
+            "int aaa(struct bbb & volatile)",
         );
-        expect("?aaa@@YAHPAUbbb@@@Z", "int __cdecl aaa(struct bbb *)");
-        expect("?aaa@@YAHQAUbbb@@@Z", "int __cdecl aaa(struct bbb * const)");
+        expect("?aaa@@YAHPAUbbb@@@Z", "int aaa(struct bbb *)");
+        expect("?aaa@@YAHQAUbbb@@@Z", "int aaa(struct bbb * const)");
         expect(
             "?aaa@@YAHRAUbbb@@@Z",
-            "int __cdecl aaa(struct bbb * volatile)",
+            "int aaa(struct bbb * volatile)",
         );
         expect(
             "?aaa@@YAHSAUbbb@@@Z",
-            "int __cdecl aaa(struct bbb * const volatile)",
+            "int aaa(struct bbb * const volatile)",
         );
         expect("??0aa.a@@QAE@XZ", "??0aa.a@@QAE@XZ");
         expect("??0aa$_3a@@QAE@XZ", "aa$_3a::aa$_3a(void)");
         expect("??2?$aaa@AAUbbb@@AAUccc@@AAU2@@ddd@1eee@2@QAEHXZ",
-              "public: int __thiscall eee::eee::ddd::ddd::aaa<struct bbb &,struct ccc &,struct ccc &>::operator new(void)");
+              "int eee::eee::ddd::ddd::aaa<struct bbb &,struct ccc &,struct ccc &>::operator new(void)");
         expect("?pSW@@3P6GHKPAX0PAU_tagSTACKFRAME@@0P6GH0K0KPAK@ZP6GPAX0K@ZP6GK0K@ZP6GK00PAU_tagADDRESS@@@Z@ZA",
               "int (__stdcall* pSW)(unsigned long,void *,void *,struct _tagSTACKFRAME *,void *,int (__stdcall*)(void *,unsigned long,void *,unsigned long,unsigned long *),void * (__stdcall*)(void *,unsigned long),unsigned long (__stdcall*)(void *,unsigned long),unsigned long (__stdcall*)(void *,void *,struct _tagADDRESS *))");
         expect("?$_aaa@Vbbb@@", "_aaa<class bbb>");
@@ -1438,10 +1459,10 @@ mod tests {
             "Foo<int (__stdcall*)(void *,void *)>::Foo<int (__stdcall*)(void *,void *)>(char *)",
         );
         expect( "??0?$Foo@P6GHPAX0@Z@@QAE@PAD@Z",
-              "__thiscall Foo<int (__stdcall*)(void *,void *)>::Foo<int (__stdcall*)(void *,void *)>(char *)");
+              "Foo<int (__stdcall*)(void *,void *)>::Foo<int (__stdcall*)(void *,void *)>(char *)");
         expect(
             "?Qux@Bar@@0PAP6AHPAV1@AAH1PAH@ZA",
-            "private: static int (__cdecl** Bar::Qux)(class Bar *,int &,int &,int *)",
+            "private: static int (** Bar::Qux)(class Bar *,int &,int &,int *)",
         );
         expect("?Qux@Bar@@0PAP6AHPAV1@AAH1PAH@ZA", "Bar::Qux");
         expect("?$AAA@$DBAB@", "AAA<`template-parameter257'>");
@@ -1451,64 +1472,64 @@ mod tests {
             "private: static class bar * __stdcall foo::bb::bar::ccccc<class aaa *>(class bar *,class ee *,unsigned int,class aaa * *,class ee *)");
         expect(
             "?f@T@@QAEHQCY1BE@BO@D@Z",
-            "public: int __thiscall T::f(char (volatile * const)[20][30])",
+            "int T::f(char (volatile * const)[20][30])",
         );
         expect(
             "?f@T@@QAEHQAY2BE@BO@CI@D@Z",
-            "public: int __thiscall T::f(char (* const)[20][30][40])",
+            "int T::f(char (* const)[20][30][40])",
         );
         expect(
             "?f@T@@QAEHQAY1BE@BO@$$CBD@Z",
-            "public: int __thiscall T::f(char const (* const)[20][30])",
+            "int T::f(char const (* const)[20][30])",
         );
         expect("??0?$Foo@U?$vector_c@H$00$01$0?1$0A@$0A@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@@mpl@boost@@@@QAE@XZ",
               "Foo<struct boost::mpl::vector_c<int,1,2,-2,0,0,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647> >::Foo<struct boost::mpl::vector_c<int,1,2,-2,0,0,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647> >(void)");
         expect(
             "?swprintf@@YAHPAGIPBGZZ",
-            "int __cdecl swprintf(unsigned short *,unsigned int,unsigned short const *,...)",
+            "int swprintf(unsigned short *,unsigned int,unsigned short const *,...)",
         );
         expect(
             "?vswprintf@@YAHPAGIPBGPAD@Z",
-            "int __cdecl vswprintf(unsigned short *,unsigned int,unsigned short const *,char *)",
+            "int vswprintf(unsigned short *,unsigned int,unsigned short const *,char *)",
         );
         expect(
             "?vswprintf@@YAHPA_WIPB_WPAD@Z",
-            "int __cdecl vswprintf(wchar_t *,unsigned int,wchar_t const *,char *)",
+            "int vswprintf(wchar_t *,unsigned int,wchar_t const *,char *)",
         );
         expect(
             "?swprintf@@YAHPA_WIPB_WZZ",
-            "int __cdecl swprintf(wchar_t *,unsigned int,wchar_t const *,...)",
+            "int swprintf(wchar_t *,unsigned int,wchar_t const *,...)",
         );
         expect("??Xstd@@YAAEAV?$complex@M@0@AEAV10@AEBV10@@Z",
-              "class std::complex<float> & __ptr64 __cdecl std::operator*=(class std::complex<float> & __ptr64,class std::complex<float> const & __ptr64)");
+              "class std::complex<float> & __ptr64 std::operator*=(class std::complex<float> & __ptr64,class std::complex<float> const & __ptr64)");
         expect(
             "?_Doraise@bad_cast@std@@MEBAXXZ",
-            "protected: virtual void __cdecl std::bad_cast::_Doraise(void)const __ptr64",
+            "virtual void std::bad_cast::_Doraise(void)const __ptr64",
         );
         expect("??$?DM@std@@YA?AV?$complex@M@0@ABMABV10@@Z",
-            "class std::complex<float> __cdecl std::operator*<float>(float const &,class std::complex<float> const &)");
+            "class std::complex<float> std::operator*<float>(float const &,class std::complex<float> const &)");
         expect("?_R2@?BN@???$_Fabs@N@std@@YANAEBV?$complex@N@1@PEAH@Z@4NB",
-            "double const `double __cdecl std::_Fabs<double>(class std::complex<double> const & __ptr64,int * __ptr64)'::`29'::_R2");
+            "double const `double std::_Fabs<double>(class std::complex<double> const & __ptr64,int * __ptr64)'::`29'::_R2");
         expect("?vtordisp_thunk@std@@$4PPPPPPPM@3EAA_NXZ",
-            "[thunk]:public: virtual bool __cdecl std::vtordisp_thunk`vtordisp{4294967292,4}' (void) __ptr64");
+            "[thunk]:virtual bool std::vtordisp_thunk`vtordisp{4294967292,4}' (void) __ptr64");
         expect(
             "??_9CView@@$BBII@AE",
-            "[thunk]: __thiscall CView::`vcall'{392,{flat}}' }'",
+            "[thunk]: CView::`vcall'{392,{flat}}' }'",
         );
         expect("?_dispatch@_impl_Engine@SalomeApp@@$R4CE@BA@PPPPPPPM@7AE_NAAVomniCallHandle@@@Z",
-            "[thunk]:public: virtual bool __thiscall SalomeApp::_impl_Engine::_dispatch`vtordispex{36,16,4294967292,8}' (class omniCallHandle &)");
+            "[thunk]:virtual bool SalomeApp::_impl_Engine::_dispatch`vtordispex{36,16,4294967292,8}' (class omniCallHandle &)");
         expect(
             "?_Doraise@bad_cast@std@@MEBAXXZ",
-            "protected: virtual void __cdecl std::bad_cast::_Doraise(void)",
+            "virtual void std::bad_cast::_Doraise(void)",
         );
         expect("??Xstd@@YAAEAV?$complex@M@0@AEAV10@AEBV10@@Z",
               "class std::complex<float> & ptr64 cdecl std::operator*=(class std::complex<float> & ptr64,class std::complex<float> const & ptr64)");
         expect("??Xstd@@YAAEAV?$complex@M@0@AEAV10@AEBV10@@Z",
             "class std::complex<float> & std::operator*=(class std::complex<float> &,class std::complex<float> const &)");
         expect("??$run@XVTask_Render_Preview@@@QtConcurrent@@YA?AV?$QFuture@X@@PEAVTask_Render_Preview@@P82@EAAXXZ@Z",
-            "class QFuture<void> __cdecl QtConcurrent::run<void,class Task_Render_Preview>(class Task_Render_Preview * __ptr64,void (__cdecl Task_Render_Preview::*)(void) __ptr64)");
+            "class QFuture<void> QtConcurrent::run<void,class Task_Render_Preview>(class Task_Render_Preview * __ptr64,void (Task_Render_Preview::*)(void) __ptr64)");
         expect("??_E?$TStrArray@$$BY0BAA@D$0BA@@@UAEPAXI@Z",
-              "public: virtual void * __thiscall TStrArray<char [256],16>::`vector deleting destructor'(unsigned int)");
+              "virtual void * TStrArray<char [256],16>::`vector deleting destructor'(unsigned int)");
     }
 
     #[test]
