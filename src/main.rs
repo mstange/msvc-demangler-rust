@@ -185,6 +185,8 @@ struct ParserState<'a> {
     // The first 10 names in a mangled name can be back-referenced by
     // special name @[0-9]. This is a storage for the first 10 names.
     memorized_names: Vec<Name<'a>>,
+
+    memorized_types: Vec<Type<'a>>,
 }
 
 impl<'a> ParserState<'a> {
@@ -353,6 +355,13 @@ impl<'a> ParserState<'a> {
             self.memorized_names.push(n.clone());
         }
     }
+    fn memorize_type(&mut self, t: &Type<'a>) {
+        // TODO: the contains check does an equality check on the Type enum, which
+        // might do unexpected things in subtle cases. It's not a pure string equality check.
+        if self.memorized_types.len() < 10 && !self.memorized_types.contains(t) {
+            self.memorized_types.push(t.clone());
+        }
+    }
 
     // Parses a name in the form of A@B@C@@ which represents C::B::A.
     fn read_name(&mut self) -> Result<NameSequence<'a>> {
@@ -382,8 +391,11 @@ impl<'a> ParserState<'a> {
                 // Templates have their own context for backreferences.
                 let saved_memorized_names =
                     mem::replace(&mut self.memorized_names, vec![Name::NonTemplate(name)]);
+                let saved_memorized_types =
+                    mem::replace(&mut self.memorized_types, vec![]);
                 let template_params = self.read_params()?;
                 let _ = mem::replace(&mut self.memorized_names, saved_memorized_names);
+                let _ = mem::replace(&mut self.memorized_types, saved_memorized_types);
                 self.expect(b"@")?; // TODO: Can this be ignored?
                 let name = Name::Template(name, template_params);
                 self.memorize_name(&name);
@@ -625,8 +637,18 @@ impl<'a> ParserState<'a> {
             return Ok(Type::Enum(name, sc));
         }
 
-        if self.consume(b"P6A") {
+        if self.consume(b"P6") {
+            let _ = self.read_calling_conv()?; // TODO: keep around
             return self.read_func_ptr(sc);
+        }
+
+        if let Some(n) = self.consume_digit() {
+            if n as usize >= self.memorized_types.len() {
+                println!("current memorized types: {:?}", self.memorized_types);
+                return Err(Error::new(format!("invalid backreference: {}", n)));
+            }
+
+            return Ok(self.memorized_types[n as usize].clone());
         }
 
         let orig = self.input;
@@ -731,17 +753,17 @@ impl<'a> ParserState<'a> {
     fn read_params(&mut self) -> Result<Params<'a>> {
         println!("read_params on {}", str::from_utf8(self.input)?);
         // Within the same parameter list, you can backreference the first 10 types.
-        let mut backref: Vec<Type<'a>> = Vec::with_capacity(10);
+        // let mut backref: Vec<Type<'a>> = Vec::with_capacity(10);
 
         let mut params: Vec<Type<'a>> = Vec::new();
 
         while !self.input.starts_with(b"@") && !self.input.starts_with(b"Z") {
             if let Some(n) = self.consume_digit() {
-                if n as usize >= backref.len() {
+                if n as usize >= self.memorized_types.len() {
                     return Err(Error::new(format!("invalid backreference: {}", n)));
                 }
-
-                params.push(backref[n as usize].clone());
+                println!("reading a type from memorized_types[{}]. full list: {:#?}", n, self.memorized_types);
+                params.push(self.memorized_types[n as usize].clone());
                 continue;
             }
 
@@ -751,8 +773,8 @@ impl<'a> ParserState<'a> {
 
             // Single-letter types are ignored for backreferences because
             // memorizing them doesn't save anything.
-            if backref.len() <= 9 && len - self.input.len() > 1 {
-                backref.push(param_type.clone());
+            if len - self.input.len() > 1 {
+                self.memorize_type(&param_type);
             }
             params.push(param_type);
         }
@@ -764,6 +786,7 @@ fn demangle<'a>(input: &'a str, flags: DemangleFlags) -> Result<String> {
     let state = ParserState {
         input: input.as_bytes(),
         memorized_names: Vec::with_capacity(10),
+        memorized_types: Vec::with_capacity(10),
     };
     let parse_result = state.parse()?;
     println!("parse_result: {:#?}", parse_result);
@@ -1228,68 +1251,64 @@ mod tests {
         // In the profiler I'd like to see "mozilla::gfx::FilterNodeSoftware::GetInputDataSourceSurface(unsigned int, const mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits>&, mozilla::gfx::FilterNodeSoftware::FormatHint, mozilla::gfx::ConvolveMatrixEdgeMode, const mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits>*)");
         // expect("?GetInputDataSourceSurface@FilterNodeSoftware@gfx@mozilla@@IAE?AU?$already_AddRefed@VDataSourceSurface@gfx@mozilla@@@@IABU?$IntRectTyped@UUnknownUnits@gfx@mozilla@@@23@W4FormatHint@123@W4ConvolveMatrixEdgeMode@23@PBU523@@Z",
         //        "struct already_AddRefed<class mozilla::gfx::DataSourceSurface> mozilla::gfx::FilterNodeSoftware::GetInputDataSourceSurface(unsigned int,struct mozilla::gfx::IntRectTyped<struct mozilla::gfx::UnknownUnits> const &,enum mozilla::gfx::FilterNodeSoftware::FormatHint,enum mozilla::gfx::ConvolveMatrixEdgeMode,struct mozilla::gfx::IntRectTyped<struct mozilla::gfx::UnknownUnits> const *)");
-        // expect(
-        //     "??0Klass@std@@AEAA@AEBV01@@Z",
-        //     "std::Klass::Klass(class std::Klass const &)",
-        // );
-        // expect("??0?$Klass@V?$Mass@_N@@@std@@QEAA@AEBV01@@Z",
-        //        "std::Klass<class Mass<bool> >::Klass<class Mass<bool> >(class std::Klass<class Mass<bool> > const &)");
-        // expect(
-        //     "??0?$Klass@_N@std@@QEAA@AEBV01@@Z",
-        //     "std::Klass<bool>::Klass<bool>(class std::Klass<bool> const &)",
-        // );
-        // expect("??0?$Klass@V?$Mass@_N@btd@@@std@@QEAA@AEBV01@@Z",
-        //        "std::Klass::Klass(class std::Klass const &)");
-        // expect("??0?$Klass@V?$Mass@_N@std@@@std@@QEAA@AEBV01@@Z",
-        //        "std::Klass::Klass(class std::Klass const &)");
-        // expect(
-        //     "??0bad_alloc@std@@QAE@ABV01@@Z",
-        //     "std::bad_alloc::bad_alloc(class std::bad_alloc const &)",
-        // );
-        // expect(
-        //     "??0bad_alloc@std@@QAE@PBD@Z",
-        //     "std::bad_alloc::bad_alloc(char const *)",
-        // );
-        // expect(
-        //     "??0bad_cast@@AAE@PBQBD@Z",
-        //     "bad_cast::bad_cast(char const * const *)",
-        // );
-        // expect(
-        //     "??0bad_cast@@QAE@ABQBD@Z",
-        //     "bad_cast::bad_cast(char const * const &)",
-        // );
-        // expect(
-        //     "??0bad_cast@@QAE@ABV0@@Z",
-        //     "bad_cast::bad_cast(class bad_cast const &)",
-        // );
-        // expect(
-        //     "??0bad_exception@std@@QAE@ABV01@@Z",
-        //     "std::bad_exception::bad_exception(class std::bad_exception const &)",
-        // );
-        // expect(
-        //     "??0bad_exception@std@@QAE@PBD@Z",
-        //     "std::bad_exception::bad_exception(char const *)",
-        // );
-        // expect(
-        //     "??0bad_exception@std@@QAE@PBD@Z",
-        //     "std::bad_exception::bad_exception(char const *)",
-        // );
-        // expect("??0?$basic_filebuf@DU?$char_traits@D@std@@@std@@QAE@ABV01@@Z",
-        //     "std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >(class std::basic_filebuf<char,struct std::char_traits<char> > const &)");
-        // expect("??0?$basic_filebuf@DU?$char_traits@D@std@@@std@@QAE@ABV01@@Z",
-        //     "std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >(class std::basic_filebuf<char,struct std::char_traits<char> > const &)");
-        // expect("??0?$basic_filebuf@DU?$char_traits@D@std@@@std@@QAE@PAU_iobuf@@@Z",
-        //       "std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >(struct _iobuf *)");
-        // expect("??0?$basic_filebuf@DU?$char_traits@D@std@@@std@@QAE@W4_Uninitialized@1@@Z",
-        //     "std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >(enum std::_Uninitialized)");
-        // expect("??0?$basic_filebuf@GU?$char_traits@G@std@@@std@@QAE@ABV01@@Z",
-        //     "std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >(class std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> > const &)");
-        // expect("??0?$basic_filebuf@GU?$char_traits@G@std@@@std@@QAE@PAU_iobuf@@@Z",
-        //       "std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >(struct _iobuf *)");
-        // expect("??0?$basic_filebuf@GU?$char_traits@G@std@@@std@@QAE@W4_Uninitialized@1@@Z",
-        //     "std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >(enum std::_Uninitialized)");
-        // expect("??0?$basic_stringstream@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAE@ABV01@@Z",
-        //     "std::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >(class std::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> > const &)");
+        expect(
+            "??0Klass@std@@AEAA@AEBV01@@Z",
+            "std::Klass::Klass(class std::Klass const &)",
+        );
+        expect("??0?$Klass@V?$Mass@_N@@@std@@QEAA@AEBV01@@Z",
+               "std::Klass<class Mass<bool> >::Klass<class Mass<bool> >(class std::Klass<class Mass<bool> > const &)");
+        expect(
+            "??0?$Klass@_N@std@@QEAA@AEBV01@@Z",
+            "std::Klass<bool>::Klass<bool>(class std::Klass<bool> const &)",
+        );
+        expect(
+            "??0bad_alloc@std@@QAE@ABV01@@Z",
+            "std::bad_alloc::bad_alloc(class std::bad_alloc const &)",
+        );
+        expect(
+            "??0bad_alloc@std@@QAE@PBD@Z",
+            "std::bad_alloc::bad_alloc(char const *)",
+        );
+        expect(
+            "??0bad_cast@@AAE@PBQBD@Z",
+            "bad_cast::bad_cast(char const * const *)",
+        );
+        expect(
+            "??0bad_cast@@QAE@ABQBD@Z",
+            "bad_cast::bad_cast(char const * const &)",
+        );
+        expect(
+            "??0bad_cast@@QAE@ABV0@@Z",
+            "bad_cast::bad_cast(class bad_cast const &)",
+        );
+        expect(
+            "??0bad_exception@std@@QAE@ABV01@@Z",
+            "std::bad_exception::bad_exception(class std::bad_exception const &)",
+        );
+        expect(
+            "??0bad_exception@std@@QAE@PBD@Z",
+            "std::bad_exception::bad_exception(char const *)",
+        );
+        expect(
+            "??0bad_exception@std@@QAE@PBD@Z",
+            "std::bad_exception::bad_exception(char const *)",
+        );
+        expect("??0?$basic_filebuf@DU?$char_traits@D@std@@@std@@QAE@ABV01@@Z",
+            "std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >(class std::basic_filebuf<char,struct std::char_traits<char> > const &)");
+        expect("??0?$basic_filebuf@DU?$char_traits@D@std@@@std@@QAE@ABV01@@Z",
+            "std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >(class std::basic_filebuf<char,struct std::char_traits<char> > const &)");
+        expect("??0?$basic_filebuf@DU?$char_traits@D@std@@@std@@QAE@PAU_iobuf@@@Z",
+              "std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >(struct _iobuf *)");
+        expect("??0?$basic_filebuf@DU?$char_traits@D@std@@@std@@QAE@W4_Uninitialized@1@@Z",
+            "std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >(enum std::_Uninitialized)");
+        expect("??0?$basic_filebuf@GU?$char_traits@G@std@@@std@@QAE@ABV01@@Z",
+            "std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >(class std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> > const &)");
+        expect("??0?$basic_filebuf@GU?$char_traits@G@std@@@std@@QAE@PAU_iobuf@@@Z",
+              "std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >(struct _iobuf *)");
+        expect("??0?$basic_filebuf@GU?$char_traits@G@std@@@std@@QAE@W4_Uninitialized@1@@Z",
+            "std::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >::basic_filebuf<unsigned short,struct std::char_traits<unsigned short> >(enum std::_Uninitialized)");
+        expect("??0?$basic_stringstream@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAE@ABV01@@Z",
+            "std::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >(class std::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> > const &)");
 
         expect("??0?$basic_stringstream@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@QAE@ABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@1@H@Z",
             "std::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >::basic_stringstream<char,struct std::char_traits<char>,class std::allocator<char> >(class std::basic_string<char,struct std::char_traits<char>,class std::allocator<char> > const &,int)");
@@ -1493,8 +1512,10 @@ mod tests {
         expect("??0aa$_3a@@QAE@XZ", "aa$_3a::aa$_3a(void)");
         expect("??2?$aaa@AAUbbb@@AAUccc@@AAU2@@ddd@1eee@2@QAEHXZ",
               "int eee::eee::ddd::ddd::aaa<struct bbb &,struct ccc &,struct ccc &>::operator new(void)");
+
         expect("?pSW@@3P6GHKPAX0PAU_tagSTACKFRAME@@0P6GH0K0KPAK@ZP6GPAX0K@ZP6GK0K@ZP6GK00PAU_tagADDRESS@@@Z@ZA",
-              "int (__stdcall* pSW)(unsigned long,void *,void *,struct _tagSTACKFRAME *,void *,int (__stdcall*)(void *,unsigned long,void *,unsigned long,unsigned long *),void * (__stdcall*)(void *,unsigned long),unsigned long (__stdcall*)(void *,unsigned long),unsigned long (__stdcall*)(void *,void *,struct _tagADDRESS *))");
+              "int (*pSW)(unsigned long,void *,void *,struct _tagSTACKFRAME *,void *,int (*)(void *,unsigned long,void *,unsigned long,unsigned long *),void * (*)(void *,unsigned long),unsigned long (*)(void *,unsigned long),unsigned long (*)(void *,void *,struct _tagADDRESS *))");
+
         expect("?$_aaa@Vbbb@@", "_aaa<class bbb>");
         expect(
             "?$aaa@Vbbb@ccc@@Vddd@2@",
@@ -1502,11 +1523,11 @@ mod tests {
         );
         expect(
             "??0?$Foo@P6GHPAX0@Z@@QAE@PAD@Z",
-            "Foo<int (__stdcall*)(void *,void *)>::Foo<int (__stdcall*)(void *,void *)>(char *)",
+            "Foo<int (*)(void *,void *)>::Foo<int (*)(void *,void *)>(char *)",
         );
         expect(
             "??0?$Foo@P6GHPAX0@Z@@QAE@PAD@Z",
-            "Foo<int (__stdcall*)(void *,void *)>::Foo<int (__stdcall*)(void *,void *)>(char *)",
+            "Foo<int (*)(void *,void *)>::Foo<int (*)(void *,void *)>(char *)",
         );
         expect(
             "?Qux@Bar@@0PAP6AHPAV1@AAH1PAH@ZA",
@@ -1517,7 +1538,7 @@ mod tests {
         expect("?$AAA@?C@", "AAA<`template-parameter-2'>");
         expect("?$AAA@PAUBBB@@", "AAA<struct BBB *>");
         expect("??$ccccc@PAVaaa@@@bar@bb@foo@@DGPAV0@PAV0@PAVee@@IPAPAVaaa@@1@Z",
-            "class bar * __stdcall foo::bb::bar::ccccc<class aaa *>(class bar *,class ee *,unsigned int,class aaa * *,class ee *)");
+            "class bar * foo::bb::bar::ccccc<class aaa *>(class bar *,class ee *,unsigned int,class aaa * *,class ee *)");
         expect(
             "?f@T@@QAEHQCY1BE@BO@D@Z",
             "int T::f(char (volatile * const)[20][30])",
