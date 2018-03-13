@@ -363,14 +363,18 @@ impl<'a> ParserState<'a> {
                     )));
                 }
                 println!("reading memorized name in position {}", i);
-                println!("current list of memorized_names: {:#?}", self.memorized_names);
+                println!(
+                    "current list of memorized_names: {:#?}",
+                    self.memorized_names
+                );
                 self.memorized_names[i].clone()
             } else if self.consume(b"?$") {
                 // Class template.
                 let name = self.read_string()?;
                 // println!("read_string read name {}", str::from_utf8(name)?);
                 // Templates have their own context for backreferences.
-                let saved_memorized_names = mem::replace(&mut self.memorized_names, vec![Name::NonTemplate(name)]);
+                let saved_memorized_names =
+                    mem::replace(&mut self.memorized_names, vec![Name::NonTemplate(name)]);
                 let template_params = self.read_params()?;
                 let _ = mem::replace(&mut self.memorized_names, saved_memorized_names);
                 self.expect(b"@")?; // TODO: Can this be ignored?
@@ -1044,16 +1048,16 @@ impl<'a> Serializer<'a> {
                     match op {
                         "ctor" => {
                             self.write_one_name(prev)?;
-                        },
-                         "dtor" => {
+                        }
+                        "dtor" => {
                             write!(self.w, "~")?;
                             self.write_one_name(prev)?;
-                        },
+                        }
                         "vbtable" => {
                             write!(self.w, "{}", "`vbtable'{for `")?;
                             self.write_one_name(prev)?;
                             write!(self.w, "{}", "'}")?;
-                        },
+                        }
                         _ => {
                             // Print out an overloaded operator.
                             write!(self.w, "operator{}", op)?;
@@ -1299,8 +1303,10 @@ mod tests {
               "std::num_get<unsigned short,class std::istreambuf_iterator<unsigned short,struct std::char_traits<unsigned short> > >::~num_get<unsigned short,class std::istreambuf_iterator<unsigned short,struct std::char_traits<unsigned short> > >(void)");
         expect("??4istream_withassign@@QAEAAV0@ABV0@@Z",
               "class istream_withassign & istream_withassign::operator=(class istream_withassign const &)");
-        expect("??4istream_withassign@@QAEAAVistream@@ABV1@@Z",
-              "class istream & istream_withassign::operator=(class istream const &)");
+        expect(
+            "??4istream_withassign@@QAEAAVistream@@ABV1@@Z",
+            "class istream & istream_withassign::operator=(class istream const &)",
+        );
         expect(
             "??4istream_withassign@@QAEAAVistream@@PAVstreambuf@@@Z",
             "class istream & istream_withassign::operator=(class streambuf *)",
@@ -1419,26 +1425,17 @@ mod tests {
             "?_Sync@ios_base@std@@0_NA",
             "private: static bool std::ios_base::_Sync",
         );
-        expect(
-            "??_U@YAPAXI@Z",
-            "void * operator new[](unsigned int)",
-        );
+        expect("??_U@YAPAXI@Z", "void * operator new[](unsigned int)");
         expect("??_V@YAXPAX@Z", "void operator delete[](void *)");
         expect("??X?$_Complex_base@M@std@@QAEAAV01@ABM@Z",
               "class std::_Complex_base<float> & std::_Complex_base<float>::operator*=(float const &)");
         expect("??Xstd@@YAAAV?$complex@M@0@AAV10@ABV10@@Z",
               "class std::complex<float> & std::operator*=(class std::complex<float> &,class std::complex<float> const &)");
         expect("?aaa@@YAHAAUbbb@@@Z", "int aaa(struct bbb &)");
-        expect(
-            "?aaa@@YAHBAUbbb@@@Z",
-            "int aaa(struct bbb & volatile)",
-        );
+        expect("?aaa@@YAHBAUbbb@@@Z", "int aaa(struct bbb & volatile)");
         expect("?aaa@@YAHPAUbbb@@@Z", "int aaa(struct bbb *)");
         expect("?aaa@@YAHQAUbbb@@@Z", "int aaa(struct bbb * const)");
-        expect(
-            "?aaa@@YAHRAUbbb@@@Z",
-            "int aaa(struct bbb * volatile)",
-        );
+        expect("?aaa@@YAHRAUbbb@@@Z", "int aaa(struct bbb * volatile)");
         expect(
             "?aaa@@YAHSAUbbb@@@Z",
             "int aaa(struct bbb * const volatile)",
@@ -1458,8 +1455,10 @@ mod tests {
             "??0?$Foo@P6GHPAX0@Z@@QAE@PAD@Z",
             "Foo<int (__stdcall*)(void *,void *)>::Foo<int (__stdcall*)(void *,void *)>(char *)",
         );
-        expect( "??0?$Foo@P6GHPAX0@Z@@QAE@PAD@Z",
-              "Foo<int (__stdcall*)(void *,void *)>::Foo<int (__stdcall*)(void *,void *)>(char *)");
+        expect(
+            "??0?$Foo@P6GHPAX0@Z@@QAE@PAD@Z",
+            "Foo<int (__stdcall*)(void *,void *)>::Foo<int (__stdcall*)(void *,void *)>(char *)",
+        );
         expect(
             "?Qux@Bar@@0PAP6AHPAV1@AAH1PAH@ZA",
             "private: static int (** Bar::Qux)(class Bar *,int &,int &,int *)",
@@ -1510,8 +1509,10 @@ mod tests {
             "class std::complex<float> std::operator*<float>(float const &,class std::complex<float> const &)");
         expect("?_R2@?BN@???$_Fabs@N@std@@YANAEBV?$complex@N@1@PEAH@Z@4NB",
             "double const `double std::_Fabs<double>(class std::complex<double> const & __ptr64,int * __ptr64)'::`29'::_R2");
-        expect("?vtordisp_thunk@std@@$4PPPPPPPM@3EAA_NXZ",
-            "[thunk]:virtual bool std::vtordisp_thunk`vtordisp{4294967292,4}' (void) __ptr64");
+        expect(
+            "?vtordisp_thunk@std@@$4PPPPPPPM@3EAA_NXZ",
+            "[thunk]:virtual bool std::vtordisp_thunk`vtordisp{4294967292,4}' (void) __ptr64",
+        );
         expect(
             "??_9CView@@$BBII@AE",
             "[thunk]: CView::`vcall'{392,{flat}}' }'",
@@ -1528,8 +1529,10 @@ mod tests {
             "class std::complex<float> & std::operator*=(class std::complex<float> &,class std::complex<float> const &)");
         expect("??$run@XVTask_Render_Preview@@@QtConcurrent@@YA?AV?$QFuture@X@@PEAVTask_Render_Preview@@P82@EAAXXZ@Z",
             "class QFuture<void> QtConcurrent::run<void,class Task_Render_Preview>(class Task_Render_Preview * __ptr64,void (Task_Render_Preview::*)(void) __ptr64)");
-        expect("??_E?$TStrArray@$$BY0BAA@D$0BA@@@UAEPAXI@Z",
-              "virtual void * TStrArray<char [256],16>::`vector deleting destructor'(unsigned int)");
+        expect(
+            "??_E?$TStrArray@$$BY0BAA@D$0BA@@@UAEPAXI@Z",
+            "virtual void * TStrArray<char [256],16>::`vector deleting destructor'(unsigned int)",
+        );
     }
 
     #[test]
