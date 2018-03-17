@@ -207,7 +207,7 @@ impl<'a> ParserState<'a> {
 
         // What follows is a main symbol name. This may include
         // namespaces or class names.
-        let symbol = self.read_name()?;
+        let symbol = self.read_name(true)?;
 
         if let Ok(c) = self.get() {
             let symbol_type = match c {
@@ -217,12 +217,12 @@ impl<'a> ParserState<'a> {
                 }
                 b'6' => {
                     let access_class = self.read_func_access_class();
-                    let name = self.read_name()?;
+                    let name = self.read_name(false)?;
                     Type::CXXVFTable(name, access_class)
                 }
                 b'7' => {
                     let access_class = self.read_func_access_class();
-                    let name = self.read_name()?;
+                    let name = self.read_name(false)?;
                     Type::CXXVBTable(name, access_class)
                 }
                 b'Y' => {
@@ -366,6 +366,7 @@ impl<'a> ParserState<'a> {
     fn memorize_name(&mut self, n: &Name<'a>) {
         // TODO: the contains check does an equality check on the Name enum, which
         // might do unexpected things in subtle cases. It's not a pure string equality check.
+        println!("memorize name {:?}", n);
         if self.memorized_names.len() < 10 && !self.memorized_names.contains(n) {
             self.memorized_names.push(n.clone());
         }
@@ -396,7 +397,7 @@ impl<'a> ParserState<'a> {
     }
 
     // Parses a name in the form of A@B@C@@ which represents C::B::A.
-    fn read_name(&mut self) -> Result<NameSequence<'a>> {
+    fn read_name(&mut self, mut function: bool) -> Result<NameSequence<'a>> {
         println!("read_name on {}", str::from_utf8(self.input)?);
         let mut names = Vec::new();
         while !self.consume(b"@") {
@@ -410,15 +411,17 @@ impl<'a> ParserState<'a> {
                         str::from_utf8(orig)?
                     )));
                 }
-                // println!("reading memorized name in position {}", i);
-                // println!(
-                //     "current list of memorized_names: {:#?}",
-                //     self.memorized_names
-                // );
+                 println!("reading memorized name in position {}", i);
+                 println!(
+                     "current list of memorized_names: {:#?}",
+                     self.memorized_names
+                 );
                 self.memorized_names[i].clone()
             } else if self.consume(b"?$") {
                 let name = self.read_template_name()?;
-                self.memorize_name(&name);
+                if !function {
+                    self.memorize_name(&name);
+                }
                 name
             } else if self.consume(b"?") {
                 // Overloaded operator.
@@ -430,6 +433,7 @@ impl<'a> ParserState<'a> {
                 self.memorize_name(&name);
                 name
             };
+            function = false;
             names.push(name);
         }
 
@@ -653,7 +657,7 @@ impl<'a> ParserState<'a> {
     fn read_var_type(&mut self, sc: StorageClass) -> Result<Type<'a>> {
         println!("read_var_type on {}", str::from_utf8(self.input)?);
         if self.consume(b"W4") {
-            let name = self.read_name()?;
+            let name = self.read_name(false)?;
             return Ok(Type::Enum(name, sc));
         }
 
@@ -684,9 +688,9 @@ impl<'a> ParserState<'a> {
         let orig = self.input;
 
         Ok(match self.get()? {
-            b'T' => Type::Union(self.read_name()?, sc),
-            b'U' => Type::Struct(self.read_name()?, sc),
-            b'V' => Type::Class(self.read_name()?, sc),
+            b'T' => Type::Union(self.read_name(false)?, sc),
+            b'U' => Type::Struct(self.read_name(false)?, sc),
+            b'V' => Type::Class(self.read_name(false)?, sc),
             b'A' => Type::Ref(Box::new(self.read_pointee()?), sc),
             b'B' => Type::Ref(Box::new(self.read_pointee()?), StorageClass::VOLATILE),
             b'P' => Type::Ptr(Box::new(self.read_pointee()?), sc),
@@ -1291,6 +1295,8 @@ mod tests {
         );
         expect("??0?$Klass@V?$Mass@_N@@@std@@QEAA@AEBV01@@Z",
                "std::Klass<class Mass<bool> >::Klass<class Mass<bool> >(class std::Klass<class Mass<bool> > const &)");
+        expect("??$ccccc@PAVaaa@@@bar@bb@foo@@DGPAV0@PAV0@PAVee@@IPAPAVaaa@@1@Z",
+               "class bar *foo::bb::bar::ccccc<class aaa *>(class bar *,class ee *,unsigned int,class aaa * *,class ee *)");
         expect(
             "??0?$Klass@_N@std@@QEAA@AEBV01@@Z",
             "std::Klass<bool>::Klass<bool>(class std::Klass<bool> const &)",
@@ -1572,7 +1578,7 @@ mod tests {
         expect("?$AAA@?C@", "AAA<`template-parameter-2'>");
         expect("?$AAA@PAUBBB@@", "AAA<struct BBB *>");
         expect("??$ccccc@PAVaaa@@@bar@bb@foo@@DGPAV0@PAV0@PAVee@@IPAPAVaaa@@1@Z",
-            "class bar * foo::bb::bar::ccccc<class aaa *>(class bar *,class ee *,unsigned int,class aaa * *,class ee *)");
+            "class bar *foo::bb::bar::ccccc<class aaa *>(class bar *,class ee *,unsigned int,class aaa * *,class ee *)");
         expect(
             "?f@T@@QAEHQCY1BE@BO@D@Z",
             "int T::f(char (volatile * const)[20][30])",
