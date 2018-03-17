@@ -1286,6 +1286,14 @@ mod tests {
             expect_with_flags(input, reference, ::DemangleFlags::LotsOfWhitespace);
         };
 
+        expect("?f@@YAHQBH@Z",
+               "int f(int const * const)",
+        );
+        expect("?g@@YAHQAY0EA@$$CBH@Z",
+               "int g(int const (* const)[64])",
+
+        );
+
         // In the profiler I'd like to see "mozilla::gfx::FilterNodeSoftware::GetInputDataSourceSurface(unsigned int, const mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits>&, mozilla::gfx::FilterNodeSoftware::FormatHint, mozilla::gfx::ConvolveMatrixEdgeMode, const mozilla::gfx::IntRectTyped<mozilla::gfx::UnknownUnits>*)");
         // expect("?GetInputDataSourceSurface@FilterNodeSoftware@gfx@mozilla@@IAE?AU?$already_AddRefed@VDataSourceSurface@gfx@mozilla@@@@IABU?$IntRectTyped@UUnknownUnits@gfx@mozilla@@@23@W4FormatHint@123@W4ConvolveMatrixEdgeMode@23@PBU523@@Z",
         //        "struct already_AddRefed<class mozilla::gfx::DataSourceSurface> mozilla::gfx::FilterNodeSoftware::GetInputDataSourceSurface(unsigned int,struct mozilla::gfx::IntRectTyped<struct mozilla::gfx::UnknownUnits> const &,enum mozilla::gfx::FilterNodeSoftware::FormatHint,enum mozilla::gfx::ConvolveMatrixEdgeMode,struct mozilla::gfx::IntRectTyped<struct mozilla::gfx::UnknownUnits> const *)");
@@ -1579,6 +1587,8 @@ mod tests {
         expect("?$AAA@PAUBBB@@", "AAA<struct BBB *>");
         expect("??$ccccc@PAVaaa@@@bar@bb@foo@@DGPAV0@PAV0@PAVee@@IPAPAVaaa@@1@Z",
             "class bar *foo::bb::bar::ccccc<class aaa *>(class bar *,class ee *,unsigned int,class aaa * *,class ee *)");
+
+        /* this isn't real c++
         expect(
             "?f@T@@QAEHQCY1BE@BO@D@Z",
             "int T::f(char (volatile * const)[20][30])",
@@ -1590,7 +1600,7 @@ mod tests {
         expect(
             "?f@T@@QAEHQAY1BE@BO@$$CBD@Z",
             "int T::f(char const (* const)[20][30])",
-        );
+        );*/
         expect("??0?$Foo@U?$vector_c@H$00$01$0?1$0A@$0A@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@$0HPPPPPPP@@mpl@boost@@@@QAE@XZ",
               "Foo<struct boost::mpl::vector_c<int,1,2,-2,0,0,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647> >::Foo<struct boost::mpl::vector_c<int,1,2,-2,0,0,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647,2147483647> >(void)");
         expect(
