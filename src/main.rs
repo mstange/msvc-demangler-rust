@@ -141,6 +141,7 @@ enum Type<'a> {
     CXXVBTable(NameSequence<'a>, StorageClass),
     CXXVFTable(NameSequence<'a>, StorageClass),
     TemplateParameterWithIndex(i32),
+    Constant(i32),
     Ptr(Box<Type<'a>>, StorageClass),
     Ref(Box<Type<'a>>, StorageClass),
     Array(i32, Box<Type<'a>>, StorageClass),
@@ -167,6 +168,7 @@ enum Type<'a> {
     Float(StorageClass),
     Double(StorageClass),
     Ldouble(StorageClass),
+    VarArgs,
 }
 
 #[derive(Debug)]
@@ -666,9 +668,15 @@ impl<'a> ParserState<'a> {
             return self.read_func_ptr(sc);
         }
 
-        if self.consume(b"$D") {
-            let n = self.read_number()?;
-            return Ok(Type::TemplateParameterWithIndex(n));
+        if self.consume(b"$") {
+            if self.consume(b"0") {
+                let n = self.read_number()?;
+                return Ok(Type::Constant(n));
+            }
+            if self.consume(b"D") {
+                let n = self.read_number()?;
+                return Ok(Type::TemplateParameterWithIndex(n));
+            }
         }
 
         if self.consume(b"?") {
@@ -812,6 +820,9 @@ impl<'a> ParserState<'a> {
             }
             params.push(param_type);
         }
+        if self.input.starts_with(b"ZZ") {
+            params.push(Type::VarArgs);
+        }
         Ok(Params { types: params })
     }
 }
@@ -878,6 +889,14 @@ impl<'a> Serializer<'a> {
             &Type::CXXVFTable(_, sc) => sc,
             &Type::TemplateParameterWithIndex(n) => {
                 write!(self.w, "`template-parameter{}'", n);
+                return Ok(());
+            },
+            &Type::Constant(n) => {
+                write!(self.w, "{}", n);
+                return Ok(());
+            },
+            &Type::VarArgs => {
+                write!(self.w, "...");
                 return Ok(());
             },
             &Type::Ptr(ref inner, storage_class) | &Type::Ref(ref inner, storage_class) => {
