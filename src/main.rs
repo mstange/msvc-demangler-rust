@@ -1639,18 +1639,18 @@ mod tests {
             "int swprintf(wchar_t *,unsigned int,wchar_t const *,...)",
         );
         expect("??Xstd@@YAAEAV?$complex@M@0@AEAV10@AEBV10@@Z",
-              "class std::complex<float> & __ptr64 std::operator*=(class std::complex<float> & __ptr64,class std::complex<float> const & __ptr64)");
+              "class std::complex<float> & std::operator*=(class std::complex<float> &,class std::complex<float> const &)");
         expect(
             "?_Doraise@bad_cast@std@@MEBAXXZ",
-            "void std::bad_cast::_Doraise(void)const __ptr64",
+            "void std::bad_cast::_Doraise(void)const ",
         );
         expect("??$?DM@std@@YA?AV?$complex@M@0@ABMABV10@@Z",
             "class std::complex<float> std::operator*<float>(float const &,class std::complex<float> const &)");
         expect("?_R2@?BN@???$_Fabs@N@std@@YANAEBV?$complex@N@1@PEAH@Z@4NB",
-            "double const `double std::_Fabs<double>(class std::complex<double> const & __ptr64,int * __ptr64)'::`29'::_R2");
+            "double const `double std::_Fabs<double>(class std::complex<double> const &,int *)'::`29'::_R2");
         expect(
             "?vtordisp_thunk@std@@$4PPPPPPPM@3EAA_NXZ",
-            "[thunk]:bool std::vtordisp_thunk`vtordisp{4294967292,4}' (void) __ptr64",
+            "[thunk]:bool std::vtordisp_thunk`vtordisp{4294967292,4}' (void)",
         );
         expect(
             "??_9CView@@$BBII@AE",
@@ -1660,14 +1660,14 @@ mod tests {
             "[thunk]:bool SalomeApp::_impl_Engine::_dispatch`vtordispex{36,16,4294967292,8}' (class omniCallHandle &)");
         expect(
             "?_Doraise@bad_cast@std@@MEBAXXZ",
-            "void std::bad_cast::_Doraise(void)",
+            "void std::bad_cast::_Doraise(void) ",
         );
         expect("??Xstd@@YAAEAV?$complex@M@0@AEAV10@AEBV10@@Z",
               "class std::complex<float> & ptr64 cdecl std::operator*=(class std::complex<float> & ptr64,class std::complex<float> const & ptr64)");
         expect("??Xstd@@YAAEAV?$complex@M@0@AEAV10@AEBV10@@Z",
             "class std::complex<float> & std::operator*=(class std::complex<float> &,class std::complex<float> const &)");
         expect("??$run@XVTask_Render_Preview@@@QtConcurrent@@YA?AV?$QFuture@X@@PEAVTask_Render_Preview@@P82@EAAXXZ@Z",
-            "class QFuture<void> QtConcurrent::run<void,class Task_Render_Preview>(class Task_Render_Preview * __ptr64,void (Task_Render_Preview::*)(void) __ptr64)");
+            "class QFuture<void> QtConcurrent::run<void,class Task_Render_Preview>(class Task_Render_Preview *,void (Task_Render_Preview::*)(void))");
         expect(
             "??_E?$TStrArray@$$BY0BAA@D$0BA@@@UAEPAXI@Z",
             "void * TStrArray<char [256],16>::`vector deleting destructor'(unsigned int)",
