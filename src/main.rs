@@ -672,6 +672,21 @@ impl<'a> ParserState<'a> {
             return self.read_func_ptr(sc);
         }
 
+        if self.consume(b"P8") {
+            let name = self.read_unqualified_name(true);
+            self.expect(b"@");
+            let _is_64bit_ptr = self.expect(b"E");
+            let access_class = self.read_func_access_class();
+            let _calling_conv = self.read_calling_conv()?;
+            let storage_class_for_return = self.read_storage_class_for_return()?;
+            let return_type = self.read_func_return_type(storage_class_for_return)?;
+            let params = self.read_params()?;
+            return Ok(Type::Ptr(
+                Box::new(Type::MemberFunction(params, access_class, Box::new(return_type))),
+                sc,
+            ));
+        }
+
         if self.consume(b"$") {
             if self.consume(b"0") {
                 let n = self.read_number()?;
