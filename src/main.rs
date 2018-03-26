@@ -260,7 +260,7 @@ impl<'a> ParserState<'a> {
     }
 
     fn peek(&self) -> Option<u8> {
-        self.input.first().map(|&u| u)
+        self.input.first().cloned()
     }
 
     fn get(&mut self) -> Result<u8> {
