@@ -1,6 +1,6 @@
 [package]
 authors = ["Markus Stange <mstange@themasta.com>"]
-name = "msvc-demangler-rust"
+name = "msvc-demangler"
 version = "0.1.0"
 
 [dependencies]

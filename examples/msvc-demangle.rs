@@ -1,6 +1,6 @@
 use std::env;
-extern crate msvc_demangler_rust;
-use msvc_demangler_rust::*;
+extern crate msvc_demangler;
+use msvc_demangler::*;
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
