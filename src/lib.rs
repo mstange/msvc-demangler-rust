@@ -1,18 +1,7 @@
-//===- MicrosoftDemangle.cpp ----------------------------------------------===//
-//
-//                     The LLVM Compiler Infrastructure
-//
 // This file is dual licensed under the MIT and the University of Illinois Open
 // Source Licenses. See LICENSE.TXT for details.
 //
-//===----------------------------------------------------------------------===//
-//
 // This file defines a demangler for MSVC-style mangled symbols.
-//
-// This file has no dependencies on the rest of LLVM so that it can be
-// easily reused in other programs such as libcxxabi.
-//
-//===----------------------------------------------------------------------===//
 
 #[macro_use]
 extern crate bitflags;
