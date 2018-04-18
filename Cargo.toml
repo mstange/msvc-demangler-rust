@@ -2,6 +2,8 @@
 authors = ["Markus Stange <mstange@themasta.com>", "Jeff Muizelaar <jrmuizel@gmail.com>"]
 name = "msvc-demangler"
 version = "0.1.0"
+keywords = ["demangle", "undecorate", "c-plus-plus", "msvc"]
+license = "MIT/NCSA"
 
 [dependencies]
 bitflags = "1.0.1"
