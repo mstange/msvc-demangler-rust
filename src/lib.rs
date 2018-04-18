@@ -24,7 +24,7 @@ use std::str;
 use std::mem;
 
 #[derive(Debug, Clone, PartialEq)]
-struct Error {
+pub struct Error {
     s: String,
 }
 
@@ -846,7 +846,7 @@ impl<'a> ParserState<'a> {
     }
 }
 
-fn demangle<'a>(input: &'a str, flags: DemangleFlags) -> Result<String> {
+pub fn demangle<'a>(input: &'a str, flags: DemangleFlags) -> Result<String> {
     let state = ParserState {
         input: input.as_bytes(),
         memorized_names: Vec::with_capacity(10),
@@ -1241,24 +1241,6 @@ impl<'a> Serializer<'a> {
         }
         write!(self.w, ">")?;
         Ok(())
-    }
-}
-
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        println!("{} <symbol>", args[0]);
-        std::process::exit(1);
-    }
-
-    match demangle(&args[1], DemangleFlags::LotsOfWhitespace) {
-        Ok(s) => {
-            println!("{}", s);
-        }
-        Err(err) => {
-            eprintln!("error: {:?}", err);
-            std::process::exit(1);
-        }
     }
 }
 
