@@ -74,7 +74,7 @@ type SerializeResult<T> = result::Result<T, SerializeError>;
 type Result<T> = result::Result<T, Error>;
 
 bitflags! {
-    struct StorageClass: u32 {
+    pub struct StorageClass: u32 {
         const CONST      = 0b00000001;
         const VOLATILE   = 0b00000010;
         const FAR        = 0b00000100;
@@ -114,26 +114,26 @@ bitflags! {
 
 // Represents an identifier which may be a template.
 #[derive(Clone, Debug, PartialEq)]
-enum Name<'a> {
+pub enum Name<'a> {
     Operator(&'static str),
     NonTemplate(&'a [u8]),
     Template(Box<Name<'a>>, Params<'a>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct NameSequence<'a> {
+pub struct NameSequence<'a> {
     names: Vec<Name<'a>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct Params<'a> {
+pub struct Params<'a> {
     types: Vec<Type<'a>>,
 }
 
 // The type class. Mangled symbols are first parsed and converted to
 // this type and then converted to string.
 #[derive(Clone, Debug, PartialEq)]
-enum Type<'a> {
+pub enum Type<'a> {
     None,
     MemberFunction(Params<'a>, StorageClass, Box<Type<'a>>),
     NonMemberFunction(Params<'a>, StorageClass, Box<Type<'a>>),
@@ -171,7 +171,7 @@ enum Type<'a> {
 }
 
 #[derive(Debug)]
-struct ParseResult<'a> {
+pub struct ParseResult<'a> {
     symbol: NameSequence<'a>,
     symbol_type: Type<'a>,
 }
@@ -850,19 +850,26 @@ impl<'a> ParserState<'a> {
 }
 
 pub fn demangle<'a>(input: &'a str, flags: DemangleFlags) -> Result<String> {
+    serialize(parse(input)?, flags)
+}
+
+pub fn parse<'a>(input: &'a str) -> Result<ParseResult> {
     let state = ParserState {
         input: input.as_bytes(),
         memorized_names: Vec::with_capacity(10),
         memorized_types: Vec::with_capacity(10),
     };
-    let parse_result = state.parse()?;
-    // println!("parse_result: {:#?}", parse_result);
+    state.parse()
+}
+
+pub fn serialize(input: ParseResult, flags: DemangleFlags) -> Result<String> {
     let mut s = Vec::new();
     {
         let mut serializer = Serializer { flags, w: &mut s };
-        serializer.serialize(&parse_result).unwrap();
+        serializer.serialize(&input).unwrap();
     }
     Ok(String::from_utf8(s)?)
+
 }
 
 // Converts an AST to a string.
