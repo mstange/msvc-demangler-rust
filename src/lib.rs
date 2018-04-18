@@ -200,9 +200,9 @@ impl<'a> ParserState<'a> {
 
         if self.consume(b"$") {
             let name = self.read_template_name()?;
-            return Ok(ParseResult{
-                symbol: NameSequence{ names: vec![name] },
-                symbol_type: Type::None
+            return Ok(ParseResult {
+                symbol: NameSequence { names: vec![name] },
+                symbol_type: Type::None,
             });
         }
 
@@ -233,7 +233,7 @@ impl<'a> ParserState<'a> {
                     let return_type = self.read_var_type(storage_class)?;
                     let params = self.read_params()?;
                     Type::NonMemberFunction(params, StorageClass::empty(), Box::new(return_type))
-                },
+                }
                 c => {
                     // Read a member function.
                     let _func_lass = self.read_func_class(c)?;
@@ -367,7 +367,7 @@ impl<'a> ParserState<'a> {
     fn memorize_name(&mut self, n: &Name<'a>) {
         // TODO: the contains check does an equality check on the Name enum, which
         // might do unexpected things in subtle cases. It's not a pure string equality check.
-         // println!("memorize name {:?}", n);
+        // println!("memorize name {:?}", n);
         if self.memorized_names.len() < 10 && !self.memorized_names.contains(n) {
             self.memorized_names.push(n.clone());
         }
@@ -382,10 +382,8 @@ impl<'a> ParserState<'a> {
 
     fn read_template_name(&mut self) -> Result<Name<'a>> {
         // Templates have their own context for backreferences.
-        let saved_memorized_names =
-            mem::replace(&mut self.memorized_names, vec![]);
-        let saved_memorized_types =
-            mem::replace(&mut self.memorized_types, vec![]);
+        let saved_memorized_names = mem::replace(&mut self.memorized_names, vec![]);
+        let saved_memorized_types = mem::replace(&mut self.memorized_types, vec![]);
         let name = self.read_unqualified_name(false)?; // how does wine deal with ??$?DM@std@@YA?AV?$complex@M@0@ABMABV10@@Z
         let template_params = self.read_params()?;
         let _ = mem::replace(&mut self.memorized_names, saved_memorized_names);
@@ -681,7 +679,11 @@ impl<'a> ParserState<'a> {
             let return_type = self.read_func_return_type(storage_class_for_return)?;
             let params = self.read_params()?;
             return Ok(Type::Ptr(
-                Box::new(Type::MemberFunction(params, access_class, Box::new(return_type))),
+                Box::new(Type::MemberFunction(
+                    params,
+                    access_class,
+                    Box::new(return_type),
+                )),
                 sc,
             ));
         }
@@ -817,7 +819,9 @@ impl<'a> ParserState<'a> {
 
         let mut params: Vec<Type<'a>> = Vec::new();
 
-        while !self.input.starts_with(b"@") && !self.input.starts_with(b"Z") && !self.input.is_empty() {
+        while !self.input.starts_with(b"@") && !self.input.starts_with(b"Z")
+            && !self.input.is_empty()
+        {
             if let Some(n) = self.consume_digit() {
                 if n as usize >= self.memorized_types.len() {
                     return Err(Error::new(format!("invalid backreference: {}", n)));
@@ -908,15 +912,15 @@ impl<'a> Serializer<'a> {
             &Type::TemplateParameterWithIndex(n) => {
                 write!(self.w, "`template-parameter{}'", n);
                 return Ok(());
-            },
+            }
             &Type::Constant(n) => {
                 write!(self.w, "{}", n);
                 return Ok(());
-            },
+            }
             &Type::VarArgs => {
                 write!(self.w, "...");
                 return Ok(());
-            },
+            }
             &Type::Ptr(ref inner, storage_class) | &Type::Ref(ref inner, storage_class) => {
                 self.write_pre(inner)?;
 
@@ -1314,13 +1318,8 @@ mod tests {
             expect_with_flags(input, reference, ::DemangleFlags::LotsOfWhitespace);
         };
 
-        expect("?f@@YAHQBH@Z",
-               "int f(int const * const)",
-        );
-        expect("?g@@YAHQAY0EA@$$CBH@Z",
-               "int g(int const (* const)[64])",
-
-        );
+        expect("?f@@YAHQBH@Z", "int f(int const * const)");
+        expect("?g@@YAHQAY0EA@$$CBH@Z", "int g(int const (* const)[64])");
         expect(
             "??0Klass@std@@AEAA@AEBV01@@Z",
             "std::Klass::Klass(class std::Klass const &)",
