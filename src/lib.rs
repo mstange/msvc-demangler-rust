@@ -670,9 +670,9 @@ impl<'a> ParserState<'a> {
         }
 
         if self.consume(b"P8") {
-            let name = self.read_unqualified_name(true);
-            self.expect(b"@");
-            let _is_64bit_ptr = self.expect(b"E");
+            let _name = self.read_unqualified_name(true);
+            self.expect(b"@")?;
+            let _is_64bit_ptr = self.expect(b"E")?;
             let access_class = self.read_func_access_class();
             let _calling_conv = self.read_calling_conv()?;
             let storage_class_for_return = self.read_storage_class_for_return()?;
@@ -910,15 +910,15 @@ impl<'a> Serializer<'a> {
             &Type::CXXVBTable(_, sc) => sc,
             &Type::CXXVFTable(_, sc) => sc,
             &Type::TemplateParameterWithIndex(n) => {
-                write!(self.w, "`template-parameter{}'", n);
+                write!(self.w, "`template-parameter{}'", n)?;
                 return Ok(());
             }
             &Type::Constant(n) => {
-                write!(self.w, "{}", n);
+                write!(self.w, "{}", n)?;
                 return Ok(());
             }
             &Type::VarArgs => {
-                write!(self.w, "...");
+                write!(self.w, "...")?;
                 return Ok(());
             }
             &Type::Ptr(ref inner, storage_class) | &Type::Ref(ref inner, storage_class) => {
