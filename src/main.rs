@@ -387,7 +387,7 @@ impl<'a> ParserState<'a> {
             mem::replace(&mut self.memorized_names, vec![]);
         let saved_memorized_types =
             mem::replace(&mut self.memorized_types, vec![]);
-        let name = self.read_unqualified_name(false)?;
+        let name = self.read_unqualified_name(false)?; // how does wine deal with ??$?DM@std@@YA?AV?$complex@M@0@ABMABV10@@Z
         let template_params = self.read_params()?;
         let _ = mem::replace(&mut self.memorized_names, saved_memorized_names);
         let _ = mem::replace(&mut self.memorized_types, saved_memorized_types);
