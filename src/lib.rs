@@ -135,7 +135,7 @@ pub struct Params<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type<'a> {
     None,
-    MemberFunction(Params<'a>, StorageClass, Box<Type<'a>>),
+    MemberFunction(Params<'a>, StorageClass, Box<Type<'a>>), // StorageClass is for the 'this' pointer
     NonMemberFunction(Params<'a>, StorageClass, Box<Type<'a>>),
     CXXVBTable(NameSequence<'a>, StorageClass),
     CXXVFTable(NameSequence<'a>, StorageClass),
@@ -236,9 +236,15 @@ impl<'a> ParserState<'a> {
                 }
                 c => {
                     // Read a member function.
-                    let _func_lass = self.read_func_class(c)?;
-                    let _is_64bit_ptr = self.expect(b"E");
-                    let access_class = self.read_func_access_class();
+                    let func_class = self.read_func_class(c)?;
+                    let access_class;
+                    if func_class.contains(FuncClass::STATIC) {
+                        access_class = StorageClass::empty();
+                    } else {
+                        let _is_64bit_ptr = self.expect(b"E");
+                        access_class = self.read_func_access_class();
+                    }
+
                     let _calling_conv = self.read_calling_conv()?;
                     let storage_class_for_return = self.read_storage_class_for_return()?;
                     let return_type = self.read_func_return_type(storage_class_for_return)?;
@@ -1333,6 +1339,8 @@ mod tests {
         );
         expect("??0?$Klass@V?$Mass@_N@@@std@@QEAA@AEBV01@@Z",
                "std::Klass<class Mass<bool> >::Klass<class Mass<bool> >(class std::Klass<class Mass<bool> > const &)");
+        expect("??$load@M@UnsharedOps@js@@SAMV?$SharedMem@PAM@@@Z",
+               "float js::UnsharedOps::load<float>(class SharedMem<float *>)");
     }
 
     #[test]
