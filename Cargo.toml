@@ -4,6 +4,8 @@ name = "msvc-demangler"
 version = "0.1.0"
 keywords = ["demangle", "undecorate", "c-plus-plus", "msvc"]
 license = "MIT/NCSA"
+documentation = "https://docs.rs/msvc-demangler/"
+description = "A rust library that demangles / undecorates C++ symbols mangled by MSVC"
 
 [dependencies]
 bitflags = "1.0.1"
