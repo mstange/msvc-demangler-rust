@@ -1,5 +1,5 @@
 [package]
-authors = ["Markus Stange <mstange@themasta.com>"]
+authors = ["Markus Stange <mstange@themasta.com>", "Jeff Muizelaar <jrmuizel@gmail.com>"]
 name = "msvc-demangler"
 version = "0.1.0"
 
