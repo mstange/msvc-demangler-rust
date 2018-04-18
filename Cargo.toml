@@ -1,7 +1,7 @@
 [package]
 authors = ["Markus Stange <mstange@themasta.com>", "Jeff Muizelaar <jrmuizel@gmail.com>"]
 name = "msvc-demangler"
-version = "0.3.2"
+version = "0.3.3-alpha.0"
 keywords = ["demangle", "undecorate", "c-plus-plus", "msvc"]
 license = "MIT/NCSA"
 documentation = "https://docs.rs/msvc-demangler/"
