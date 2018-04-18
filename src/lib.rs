@@ -122,12 +122,12 @@ pub enum Name<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct NameSequence<'a> {
-    names: Vec<Name<'a>>,
+    pub names: Vec<Name<'a>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Params<'a> {
-    types: Vec<Type<'a>>,
+    pub types: Vec<Type<'a>>,
 }
 
 // The type class. Mangled symbols are first parsed and converted to
@@ -172,8 +172,8 @@ pub enum Type<'a> {
 
 #[derive(Debug)]
 pub struct ParseResult<'a> {
-    symbol: NameSequence<'a>,
-    symbol_type: Type<'a>,
+    pub symbol: NameSequence<'a>,
+    pub symbol_type: Type<'a>,
 }
 
 // Demangler class takes the main role in demangling symbols.
