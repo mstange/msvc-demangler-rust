@@ -17,7 +17,6 @@
 #[macro_use]
 extern crate bitflags;
 
-use std::env;
 use std::io::Write;
 use std::result;
 use std::str;
