@@ -71,7 +71,7 @@ impl From<std::io::Error> for SerializeError {
 
 type SerializeResult<T> = result::Result<T, SerializeError>;
 
-type Result<T> = result::Result<T, Error>;
+pub type Result<T> = result::Result<T, Error>;
 
 bitflags! {
     pub struct StorageClass: u32 {
