@@ -368,7 +368,7 @@ impl<'a> ParserState<'a> {
     fn memorize_name(&mut self, n: &Name<'a>) {
         // TODO: the contains check does an equality check on the Name enum, which
         // might do unexpected things in subtle cases. It's not a pure string equality check.
-        println!("memorize name {:?}", n);
+         // println!("memorize name {:?}", n);
         if self.memorized_names.len() < 10 && !self.memorized_names.contains(n) {
             self.memorized_names.push(n.clone());
         }
@@ -407,11 +407,11 @@ impl<'a> ParserState<'a> {
                     str::from_utf8(orig)?
                 )));
             }
-            println!("reading memorized name in position {}", i);
-            println!(
-                "current list of memorized_names: {:#?}",
-                self.memorized_names
-            );
+            // println!("reading memorized name in position {}", i);
+            // println!(
+            //    "current list of memorized_names: {:#?}",
+            //    self.memorized_names
+            // );
             self.memorized_names[i].clone()
         } else if self.consume(b"?$") {
             let name = self.read_template_name()?;
@@ -434,10 +434,10 @@ impl<'a> ParserState<'a> {
 
     // Parses a name in the form of A@B@C@@ which represents C::B::A.
     fn read_name(&mut self, mut function: bool) -> Result<NameSequence<'a>> {
-        println!("read_name on {}", str::from_utf8(self.input)?);
+        // println!("read_name on {}", str::from_utf8(self.input)?);
         let mut names = Vec::new();
         while !self.consume(b"@") {
-            println!("read_name iteration on {}", str::from_utf8(self.input)?);
+            // println!("read_name iteration on {}", str::from_utf8(self.input)?);
             let name = self.read_unqualified_name(function)?;
             function = false;
             names.push(name);
@@ -661,7 +661,7 @@ impl<'a> ParserState<'a> {
 
     // Reads a variable type.
     fn read_var_type(&mut self, sc: StorageClass) -> Result<Type<'a>> {
-        println!("read_var_type on {}", str::from_utf8(self.input)?);
+        // println!("read_var_type on {}", str::from_utf8(self.input)?);
         if self.consume(b"W4") {
             let name = self.read_name(false)?;
             return Ok(Type::Enum(name, sc));
@@ -705,7 +705,7 @@ impl<'a> ParserState<'a> {
 
         if let Some(n) = self.consume_digit() {
             if n as usize >= self.memorized_types.len() {
-                println!("current memorized types: {:?}", self.memorized_types);
+                // println!("current memorized types: {:?}", self.memorized_types);
                 return Err(Error::new(format!("invalid backreference: {}", n)));
             }
 
@@ -812,7 +812,7 @@ impl<'a> ParserState<'a> {
 
     // Reads a function or a template parameters.
     fn read_params(&mut self) -> Result<Params<'a>> {
-        println!("read_params on {}", str::from_utf8(self.input)?);
+        // println!("read_params on {}", str::from_utf8(self.input)?);
         // Within the same parameter list, you can backreference the first 10 types.
         // let mut backref: Vec<Type<'a>> = Vec::with_capacity(10);
 
@@ -853,7 +853,7 @@ pub fn demangle<'a>(input: &'a str, flags: DemangleFlags) -> Result<String> {
         memorized_types: Vec::with_capacity(10),
     };
     let parse_result = state.parse()?;
-    println!("parse_result: {:#?}", parse_result);
+    // println!("parse_result: {:#?}", parse_result);
     let mut s = Vec::new();
     {
         let mut serializer = Serializer { flags, w: &mut s };
