@@ -73,7 +73,7 @@ bitflags! {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum DemangleFlags {
     LessWhitespace,
     LotsOfWhitespace,
@@ -107,6 +107,8 @@ pub enum Name<'a> {
     Operator(&'static str),
     NonTemplate(&'a [u8]),
     Template(Box<Name<'a>>, Params<'a>),
+    Discriminator(i32),
+    ParsedName(Box<ParseResult<'a>>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -160,7 +162,7 @@ pub enum Type<'a> {
     VarArgs,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParseResult<'a> {
     pub symbol: NameSequence<'a>,
     pub symbol_type: Type<'a>,
@@ -182,7 +184,7 @@ struct ParserState<'a> {
 }
 
 impl<'a> ParserState<'a> {
-    fn parse(mut self) -> Result<ParseResult<'a>> {
+    fn parse(&mut self) -> Result<ParseResult<'a>> {
         // MSVC-style mangled symbols must start with b'?'.
         if !self.consume(b"?") {
             return Err(Error::new("does not start with b'?'".to_owned()));
@@ -387,6 +389,50 @@ impl<'a> ParserState<'a> {
         Ok(Name::Template(Box::new(name), template_params))
     }
 
+    fn read_nested_name(&mut self) -> Result<Name<'a>> {
+        let orig = self.input;
+        let name = if let Some(i) = self.consume_digit() {
+            let i = i as usize;
+            if i >= self.memorized_names.len() {
+                return Err(Error::new(format!(
+                    "name reference too large: {}",
+                    str::from_utf8(orig)?
+                )));
+            }
+            // println!("reading memorized name in position {}", i);
+            // println!(
+            //    "current list of memorized_names: {:#?}",
+            //    self.memorized_names
+            // );
+            self.memorized_names[i].clone()
+        } else if self.consume(b"?") {
+            match self.peek() {
+                Some(b'?') => {
+                    let name = Name::ParsedName(Box::new(self.parse()?));
+                    println!("parsed name: {}", str::from_utf8(self.input)?);
+                    name
+                },
+                _ => {
+                    if self.consume(b"$") {
+                        let name = self.read_template_name()?;
+                        self.memorize_name(&name);
+                        name
+                    } else {
+                        let discriminator = self.read_number()?;
+                        Name::Discriminator(discriminator)
+                    }
+                }
+            }
+        } else {
+            // Non-template functions or classes.
+            let name = self.read_string()?;
+            let name = Name::NonTemplate(name);
+            self.memorize_name(&name);
+            name
+        };
+        Ok(name)
+    }
+
     fn read_unqualified_name(&mut self, function: bool) -> Result<Name<'a>> {
         let orig = self.input;
         let name = if let Some(i) = self.consume_digit() {
@@ -423,13 +469,12 @@ impl<'a> ParserState<'a> {
     }
 
     // Parses a name in the form of A@B@C@@ which represents C::B::A.
-    fn read_name(&mut self, mut function: bool) -> Result<NameSequence<'a>> {
+    fn read_name(&mut self, function: bool) -> Result<NameSequence<'a>> {
         // println!("read_name on {}", str::from_utf8(self.input)?);
-        let mut names = Vec::new();
+        let mut names = vec![self.read_unqualified_name(function)?];
         while !self.consume(b"@") {
             // println!("read_name iteration on {}", str::from_utf8(self.input)?);
-            let name = self.read_unqualified_name(function)?;
-            function = false;
+            let name = self.read_nested_name()?;
             names.push(name);
         }
 
@@ -860,7 +905,7 @@ pub fn demangle<'a>(input: &'a str, flags: DemangleFlags) -> Result<String> {
 }
 
 pub fn parse<'a>(input: &'a str) -> Result<ParseResult> {
-    let state = ParserState {
+    let mut state = ParserState {
         input: input.as_bytes(),
         memorized_names: Vec::with_capacity(10),
         memorized_types: Vec::with_capacity(10),
@@ -1219,6 +1264,12 @@ impl<'a> Serializer<'a> {
                 self.write_one_name(name)?;
                 self.write_tmpl_params(&params)?;
             }
+            &Name::Discriminator(ref val) => {
+                write!(self.w, "`{}'", val)?;
+            }
+            &Name::ParsedName(ref val) => {
+                write!(self.w, "`{}'", serialize(*val.clone(), self.flags).unwrap())?;
+            }
         }
         Ok(())
     }
@@ -1270,6 +1321,12 @@ impl<'a> Serializer<'a> {
                 &Name::Template(ref name, ref params) => {
                     self.write_one_name(name)?;
                     self.write_tmpl_params(&params)?;
+                }
+                &Name::Discriminator(ref val) => {
+                    write!(self.w, "`{}'", val)?;
+                }
+                &Name::ParsedName(ref val) => {
+                    write!(self.w, "{}", serialize(*val.clone(), self.flags).unwrap())?;
                 }
             }
         }
@@ -1368,6 +1425,9 @@ mod tests {
                "std::Klass<class Mass<bool> >::Klass<class Mass<bool> >(class std::Klass<class Mass<bool> > const &)");
         expect("??$load@M@UnsharedOps@js@@SAMV?$SharedMem@PAM@@@Z",
                "float js::UnsharedOps::load<float>(class SharedMem<float *>)");
+
+        expect("?cached@?1??GetLong@BinaryPath@mozilla@@SA?AW4nsresult@@QA_W@Z@4_NA",
+               "bool `enum nsresult mozilla::BinaryPath::GetLong(wchar_t * const)\'::`2\'::cached");
     }
 
     #[test]
