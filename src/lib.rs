@@ -220,7 +220,7 @@ impl<'a> ParserState<'a> {
                     let _ = self.read_calling_conv()?;
                     let storage_class = self.read_storage_class_for_return()?;
                     let return_type = self.read_var_type(storage_class)?;
-                    let params = self.read_params()?;
+                    let params = self.read_func_params()?;
                     Type::NonMemberFunction(params, StorageClass::empty(), Box::new(return_type))
                 }
                 c => {
@@ -237,7 +237,7 @@ impl<'a> ParserState<'a> {
                     let _calling_conv = self.read_calling_conv()?;
                     let storage_class_for_return = self.read_storage_class_for_return()?;
                     let return_type = self.read_func_return_type(storage_class_for_return)?;
-                    let params = self.read_params()?;
+                    let params = self.read_func_params()?;
                     Type::MemberFunction(params, access_class, Box::new(return_type))
                 }
             };
@@ -383,9 +383,6 @@ impl<'a> ParserState<'a> {
         let template_params = self.read_params()?;
         let _ = mem::replace(&mut self.memorized_names, saved_memorized_names);
         let _ = mem::replace(&mut self.memorized_types, saved_memorized_types);
-        if !self.input.is_empty() {
-            self.expect(b"@")?; // TODO: Can this be ignored?
-        }
         Ok(Name::Template(Box::new(name), template_params))
     }
 
@@ -440,13 +437,7 @@ impl<'a> ParserState<'a> {
 
     fn read_func_ptr(&mut self, sc: StorageClass) -> Result<Type<'a>> {
         let return_type = self.read_var_type(StorageClass::empty())?;
-        let params = self.read_params()?;
-
-        if self.input.starts_with(b"@Z") {
-            self.trim(2);
-        } else if self.input.starts_with(b"Z") {
-            self.trim(1);
-        }
+        let params = self.read_func_params()?;
 
         Ok(Type::Ptr(
             Box::new(Type::NonMemberFunction(
@@ -672,7 +663,7 @@ impl<'a> ParserState<'a> {
             let _calling_conv = self.read_calling_conv()?;
             let storage_class_for_return = self.read_storage_class_for_return()?;
             let return_type = self.read_func_return_type(storage_class_for_return)?;
-            let params = self.read_params()?;
+            let params = self.read_func_params()?;
             return Ok(Type::Ptr(
                 Box::new(Type::MemberFunction(
                     params,
@@ -837,11 +828,32 @@ impl<'a> ParserState<'a> {
             }
             params.push(param_type);
         }
-        if self.input.starts_with(b"ZZ") {
+
+        if self.consume(b"Z") {
             params.push(Type::VarArgs);
+        } else if self.input.is_empty() {
+            // this is needed to handle the weird standalone template manglings
+        } else {
+            self.expect(b"@")?;
         }
         Ok(Params { types: params })
     }
+
+    // Reads a function parameters.
+    fn read_func_params(&mut self) -> Result<Params<'a>> {
+        let params = if self.consume(b"X") {
+            Params {
+                types: vec![Type::Void(StorageClass::empty())],
+            }
+        } else {
+            self.read_params()?
+        };
+
+        self.expect(b"Z")?;
+
+        Ok(params)
+    }
+
 }
 
 pub fn demangle<'a>(input: &'a str, flags: DemangleFlags) -> Result<String> {
