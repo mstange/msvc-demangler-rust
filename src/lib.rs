@@ -125,6 +125,7 @@ pub struct Params<'a> {
 pub enum Type<'a> {
     None,
     MemberFunction(Params<'a>, StorageClass, Box<Type<'a>>), // StorageClass is for the 'this' pointer
+    MemberFunctionPointer(Name<'a>, Params<'a>, StorageClass, Box<Type<'a>>),
     NonMemberFunction(Params<'a>, StorageClass, Box<Type<'a>>),
     CXXVBTable(NameSequence<'a>, StorageClass),
     CXXVFTable(NameSequence<'a>, StorageClass),
@@ -656,7 +657,7 @@ impl<'a> ParserState<'a> {
         }
 
         if self.consume(b"P8") {
-            let _name = self.read_unqualified_name(true);
+            let name = self.read_unqualified_name(true)?;
             self.expect(b"@")?;
             let _is_64bit_ptr = self.expect(b"E")?;
             let access_class = self.read_func_access_class();
@@ -664,13 +665,11 @@ impl<'a> ParserState<'a> {
             let storage_class_for_return = self.read_storage_class_for_return()?;
             let return_type = self.read_func_return_type(storage_class_for_return)?;
             let params = self.read_func_params()?;
-            return Ok(Type::Ptr(
-                Box::new(Type::MemberFunction(
-                    params,
-                    access_class,
-                    Box::new(return_type),
-                )),
-                sc,
+            return Ok(Type::MemberFunctionPointer(
+                name,
+                params,
+                access_class,
+                Box::new(return_type),
             ));
         }
 
@@ -917,6 +916,19 @@ impl<'a> Serializer<'a> {
                 self.write_pre(inner)?;
                 return Ok(());
             }
+            &Type::MemberFunctionPointer(ref name, _, _, ref inner) => {
+                self.write_pre(inner)?;
+                if self.flags == DemangleFlags::LotsOfWhitespace {
+                    self.write_space()?;
+                }
+                write!(self.w, "(")?;
+                if self.flags == DemangleFlags::LotsOfWhitespace {
+                    self.write_space()?;
+                }
+                self.write_one_name(name)?;
+                write!(self.w, "::*)")?;
+                return Ok(());
+            }
             &Type::NonMemberFunction(_, _, ref inner) => {
                 self.write_pre(inner)?;
                 return Ok(());
@@ -1079,6 +1091,20 @@ impl<'a> Serializer<'a> {
         match t {
             &Type::MemberFunction(ref params, sc, ref return_type)
             | &Type::NonMemberFunction(ref params, sc, ref return_type) => {
+                write!(self.w, "(")?;
+                self.write_params(params)?;
+                write!(self.w, ")")?;
+
+                self.write_post(return_type)?;
+
+                if sc.contains(StorageClass::CONST) {
+                    write!(self.w, "const")?;
+                    if self.flags == DemangleFlags::LotsOfWhitespace {
+                        self.write_space()?;
+                    }
+                }
+            }
+            &Type::MemberFunctionPointer(_, ref params, sc, ref return_type) => {
                 write!(self.w, "(")?;
                 self.write_params(params)?;
                 write!(self.w, ")")?;
