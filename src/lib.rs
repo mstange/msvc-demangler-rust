@@ -944,7 +944,7 @@ impl<'a> ParserState<'a> {
 }
 
 pub fn demangle<'a>(input: &'a str, flags: DemangleFlags) -> Result<String> {
-    serialize(parse(input)?, flags)
+    serialize(&parse(input)?, flags)
 }
 
 pub fn parse<'a>(input: &'a str) -> Result<ParseResult> {
@@ -956,7 +956,7 @@ pub fn parse<'a>(input: &'a str) -> Result<ParseResult> {
     state.parse()
 }
 
-pub fn serialize(input: ParseResult, flags: DemangleFlags) -> Result<String> {
+pub fn serialize(input: &ParseResult, flags: DemangleFlags) -> Result<String> {
     let mut s = Vec::new();
     {
         let mut serializer = Serializer { flags, w: &mut s };
@@ -1327,7 +1327,7 @@ impl<'a> Serializer<'a> {
                 write!(self.w, "`{}'", val)?;
             }
             &Name::ParsedName(ref val) => {
-                write!(self.w, "`{}'", serialize(*val.clone(), self.flags).unwrap())?;
+                write!(self.w, "`{}'", serialize(val, self.flags).unwrap())?;
             }
         }
         Ok(())
@@ -1385,7 +1385,7 @@ impl<'a> Serializer<'a> {
                     write!(self.w, "`{}'", val)?;
                 }
                 &Name::ParsedName(ref val) => {
-                    write!(self.w, "{}", serialize(*val.clone(), self.flags).unwrap())?;
+                    write!(self.w, "{}", serialize(val, self.flags).unwrap())?;
                 }
             }
         }
