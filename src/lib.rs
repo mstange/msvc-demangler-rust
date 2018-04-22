@@ -550,6 +550,9 @@ impl<'a> ParserState<'a> {
                 b'7' => "vftable",
                 b'8' => "vbtable",
                 b'9' => "vcall",
+                b'A' => "typeof",
+                b'D' => "vbase destructor",
+                b'E' => "vector deleting destructor",
                 b'F' => "ctor_DefaultClosure", // TODO
                 b'O' => "ctor_CopyingClosure", // TODO
                 b'U' => " new[]",
