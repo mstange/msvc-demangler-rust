@@ -505,58 +505,71 @@ impl<'a> ParserState<'a> {
         Ok(match self.get()? {
             b'0' => "ctor",
             b'1' => "dtor",
-            b'2' => " new",
-            b'3' => " delete",
-            b'4' => "=",
-            b'5' => ">>",
-            b'6' => "<<",
-            b'7' => "!",
-            b'8' => "==",
-            b'9' => "!=",
-            b'A' => "[]",
-            b'B' => "cast", // TODO
-            b'C' => "->",
-            b'D' => "*",
-            b'E' => "++",
-            b'F' => "--",
-            b'G' => "-",
-            b'H' => "+",
-            b'I' => "&",
-            b'J' => "->*",
-            b'K' => "/",
-            b'L' => "%",
-            b'M' => "<",
-            b'N' => "<=",
-            b'O' => ">",
-            b'P' => ">=",
-            b'Q' => ",",
-            b'R' => "()",
-            b'S' => "~",
-            b'T' => "^",
-            b'U' => "|",
-            b'V' => "&&",
-            b'W' => "||",
-            b'X' => "*=",
-            b'Y' => "+=",
-            b'Z' => "-=",
+            b'2' => "operator new",
+            b'3' => "operator delete",
+            b'4' => "operator=",
+            b'5' => "operator>>",
+            b'6' => "operator<<",
+            b'7' => "operator!",
+            b'8' => "operator==",
+            b'9' => "operator!=",
+            b'A' => "operator[]",
+            b'B' => "operatorcast", // TODO
+            b'C' => "operator->",
+            b'D' => "operator*",
+            b'E' => "operator++",
+            b'F' => "operator--",
+            b'G' => "operator-",
+            b'H' => "operator+",
+            b'I' => "operator&",
+            b'J' => "operator->*",
+            b'K' => "operator/",
+            b'L' => "operator%",
+            b'M' => "operator<",
+            b'N' => "operator<=",
+            b'O' => "operator>",
+            b'P' => "operator>=",
+            b'Q' => "operator,",
+            b'R' => "operator()",
+            b'S' => "operator~",
+            b'T' => "operator^",
+            b'U' => "operator|",
+            b'V' => "operator&&",
+            b'W' => "operator||",
+            b'X' => "operator*=",
+            b'Y' => "operator+=",
+            b'Z' => "operator-=",
             b'_' => match self.get()? {
-                b'0' => "/=",
-                b'1' => "%=",
-                b'2' => ">>=",
-                b'3' => "<<=",
-                b'4' => "&=",
-                b'5' => "|=",
-                b'6' => "^=",
-                b'7' => "vftable",
-                b'8' => "vbtable",
-                b'9' => "vcall",
-                b'A' => "typeof",
-                b'D' => "vbase destructor",
-                b'E' => "vector deleting destructor",
-                b'F' => "ctor_DefaultClosure", // TODO
-                b'O' => "ctor_CopyingClosure", // TODO
-                b'U' => " new[]",
-                b'V' => " delete[]",
+                b'0' => "operator/=",
+                b'1' => "operator%=",
+                b'2' => "operator>>=",
+                b'3' => "operator<<=",
+                b'4' => "operator&=",
+                b'5' => "operator|=",
+                b'6' => "operator^=",
+                b'7' => "`vftable'",
+                b'8' => "`vbtable'",
+                b'9' => "`vcall'",
+                b'A' => "`typeof'",
+                b'B' => "`local static guard'",
+                b'D' => "`vbase destructor'",
+                b'E' => "`vector deleting destructor'",
+                b'F' => "`default constructor closure'",
+                b'G' => "`scalar deleting destructor'",
+                b'H' => "`vector constructor iterator'",
+                b'I' => "`vector destructor iterator'",
+                b'J' => "`vector vbase constructor iterator'",
+                b'K' => "`virtual displacement map'",
+                b'L' => "`eh vector constructor iterator'",
+                b'M' => "`eh vector destructor iterator'",
+                b'N' => "`eh vector vbase constructor iterator'",
+                b'O' => "`copy constructor closure'",
+                b'S' => "`local vftable'",
+                b'T' => "`local vftable constructor closure'",
+                b'U' => "operator new[]",
+                b'V' => "operator delete[]",
+                b'X' => "`placement delete closure'",
+                b'Y' => "`placement delete[] closure'",
                 b'_' => if self.consume(b"L") {
                     " co_await"
                 } else if self.consume(b"K") {
@@ -729,6 +742,9 @@ impl<'a> ParserState<'a> {
             if self.consume(b"D") {
                 let n = self.read_number()?;
                 return Ok(Type::TemplateParameterWithIndex(n));
+            }
+            if self.consume(b"$BY") {
+                return Ok(self.read_array()?);
             }
         }
 
@@ -1255,7 +1271,7 @@ impl<'a> Serializer<'a> {
                             self.write_space()?;
                         }
                         // Print out an overloaded operator.
-                        write!(self.w, "operator{}", op)?;
+                        write!(self.w, "{}", op)?;
                     }
                 }
                 //panic!("only the last name should be an operator");
@@ -1304,7 +1320,7 @@ impl<'a> Serializer<'a> {
                             write!(self.w, "~")?;
                             self.write_one_name(prev)?;
                         }
-                        "vbtable" => {
+                        "`vbtable'" => {
                             write!(self.w, "{}", "`vbtable'{for `")?;
                             // The rest will be written by write_post of the
                             // symbol type.
@@ -1314,7 +1330,7 @@ impl<'a> Serializer<'a> {
                                 self.write_space()?;
                             }
                             // Print out an overloaded operator.
-                            write!(self.w, "operator{}", op)?;
+                            write!(self.w, "{}", op)?;
                         }
                     }
                 }
