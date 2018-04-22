@@ -135,6 +135,7 @@ pub enum Type<'a> {
     Constant(i32),
     Ptr(Box<Type<'a>>, StorageClass),
     Ref(Box<Type<'a>>, StorageClass),
+    RValueRef(Box<Type<'a>>, StorageClass),
     Array(i32, Box<Type<'a>>, StorageClass),
 
     Struct(NameSequence<'a>, StorageClass),
@@ -746,6 +747,9 @@ impl<'a> ParserState<'a> {
             if self.consume(b"$BY") {
                 return Ok(self.read_array()?);
             }
+            if self.consume(b"$Q") {
+                return Ok(Type::RValueRef(Box::new(self.read_pointee()?), sc))
+            }
         }
 
         if self.consume(b"?") {
@@ -1011,7 +1015,9 @@ impl<'a> Serializer<'a> {
                 write!(self.w, "...")?;
                 return Ok(());
             }
-            &Type::Ptr(ref inner, storage_class) | &Type::Ref(ref inner, storage_class) => {
+            &Type::Ptr(ref inner, storage_class) |
+            &Type::Ref(ref inner, storage_class) |
+            &Type::RValueRef(ref inner, storage_class)=> {
                 self.write_pre(inner)?;
 
                 // "[]" and "()" (for function parameters) take precedence over "*",
@@ -1042,6 +1048,12 @@ impl<'a> Serializer<'a> {
                             self.write_space()?;
                         }
                         write!(self.w, "&")?
+                    }
+                    &Type::RValueRef(_, _) => {
+                        if self.flags == DemangleFlags::LotsOfWhitespace {
+                            self.write_space()?;
+                        }
+                        write!(self.w, "&&")?
                     }
                     _ => {}
                 }
@@ -1447,6 +1459,7 @@ mod tests {
 
         expect("?cached@?1??GetLong@BinaryPath@mozilla@@SA?AW4nsresult@@QA_W@Z@4_NA",
                "bool `enum nsresult mozilla::BinaryPath::GetLong(wchar_t * const)\'::`2\'::cached");
+        expect("??0?$A@_K@B@@QAE@$$QAV01@@Z","B::A<uint64_t>::A<uint64_t>(class B::A<uint64_t> &&)");
     }
 
     #[test]
