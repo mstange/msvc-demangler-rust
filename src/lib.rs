@@ -132,6 +132,7 @@ pub enum Type<'a> {
     CXXVBTable(NameSequence<'a>, StorageClass),
     CXXVFTable(NameSequence<'a>, StorageClass),
     TemplateParameterWithIndex(i32),
+    ThreadSafeStaticGuard(i32),
     Constant(i32),
     Ptr(Box<Type<'a>>, StorageClass),
     Ref(Box<Type<'a>>, StorageClass),
@@ -193,6 +194,23 @@ impl<'a> ParserState<'a> {
         }
 
         if self.consume(b"$") {
+            if self.consume(b"TSS") {
+                let mut guard_num: i32 = self.consume_digit().ok_or(Error::new("missing digit".to_owned()))? as i32;
+                while !self.consume(b"@") {
+                    guard_num = guard_num * 10 + self.consume_digit().ok_or(Error::new("missing digit".to_owned()))? as i32;
+                }
+                let mut names = vec![self.read_nested_name()?];
+                while !self.consume(b"@") {
+                    // println!("read_name iteration on {}", str::from_utf8(self.input)?);
+                    let name = self.read_nested_name()?;
+                    names.push(name);
+                }
+                self.expect(b"4HA")?;
+                return Ok(ParseResult {
+                    symbol: NameSequence { names },
+                    symbol_type: Type::ThreadSafeStaticGuard(guard_num),
+                });
+            }
             let name = self.read_template_name()?;
             return Ok(ParseResult {
                 symbol: NameSequence { names: vec![name] },
@@ -1007,6 +1025,10 @@ impl<'a> Serializer<'a> {
             &Type::CXXVFTable(_, sc) => sc,
             &Type::TemplateParameterWithIndex(n) => {
                 write!(self.w, "`template-parameter{}'", n)?;
+                return Ok(());
+            }
+            &Type::ThreadSafeStaticGuard(num) => {
+                write!(self.w, "TSS{}", num)?;
                 return Ok(());
             }
             &Type::Constant(n) => {
