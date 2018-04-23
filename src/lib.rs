@@ -157,6 +157,7 @@ pub enum Type<'a> {
     Int64(StorageClass),
     Uint64(StorageClass),
     Wchar(StorageClass),
+    Char16(StorageClass),
     Float(StorageClass),
     Double(StorageClass),
     Ldouble(StorageClass),
@@ -800,6 +801,7 @@ impl<'a> ParserState<'a> {
                 b'J' => Type::Int64(sc),
                 b'K' => Type::Uint64(sc),
                 b'W' => Type::Wchar(sc),
+                b'S' => Type::Char16(sc),
                 _ => {
                     return Err(Error::new(format!(
                         "unknown primitive type: {}",
@@ -1146,6 +1148,10 @@ impl<'a> Serializer<'a> {
             }
             &Type::Ldouble(sc) => {
                 write!(self.w, "long double")?;
+                sc
+            }
+            &Type::Char16(sc) => {
+                write!(self.w, "char16_t")?;
                 sc
             }
         };
