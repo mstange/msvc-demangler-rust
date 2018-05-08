@@ -429,7 +429,7 @@ impl<'a> ParserState<'a> {
             match self.peek() {
                 Some(b'?') => {
                     let name = Name::ParsedName(Box::new(self.parse()?));
-                    println!("parsed name: {}", str::from_utf8(self.input)?);
+                    // println!("parsed name: {}", str::from_utf8(self.input)?);
                     name
                 },
                 _ => {
