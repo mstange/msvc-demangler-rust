@@ -121,6 +121,12 @@ pub struct Params<'a> {
     pub types: Vec<Type<'a>>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Symbol<'a> {
+    pub name: Name<'a>,
+    pub scope: NameSequence<'a>
+}
+
 // The type class. Mangled symbols are first parsed and converted to
 // this type and then converted to string.
 #[derive(Clone, Debug, PartialEq)]
@@ -139,10 +145,10 @@ pub enum Type<'a> {
     RValueRef(Box<Type<'a>>, StorageClass),
     Array(i32, Box<Type<'a>>, StorageClass),
 
-    Struct(NameSequence<'a>, StorageClass),
-    Union(NameSequence<'a>, StorageClass),
-    Class(NameSequence<'a>, StorageClass),
-    Enum(NameSequence<'a>, StorageClass),
+    Struct(Symbol<'a>, StorageClass),
+    Union(Symbol<'a>, StorageClass),
+    Class(Symbol<'a>, StorageClass),
+    Enum(Symbol<'a>, StorageClass),
 
     Void(StorageClass),
     Bool(StorageClass),
@@ -167,7 +173,7 @@ pub enum Type<'a> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseResult<'a> {
-    pub symbol: NameSequence<'a>,
+    pub symbol: Symbol<'a>,
     pub symbol_type: Type<'a>,
 }
 
@@ -199,21 +205,17 @@ impl<'a> ParserState<'a> {
                 while !self.consume(b"@") {
                     guard_num = guard_num * 10 + self.consume_digit().ok_or(Error::new("missing digit".to_owned()))? as i32;
                 }
-                let mut names = vec![self.read_nested_name()?];
-                while !self.consume(b"@") {
-                    // println!("read_name iteration on {}", str::from_utf8(self.input)?);
-                    let name = self.read_nested_name()?;
-                    names.push(name);
-                }
+                let name = self.read_nested_name()?;
+                let scope = self.read_scope()?;
                 self.expect(b"4HA")?;
                 return Ok(ParseResult {
-                    symbol: NameSequence { names },
+                    symbol: Symbol { name, scope },
                     symbol_type: Type::ThreadSafeStaticGuard(guard_num),
                 });
             }
             let name = self.read_template_name()?;
             return Ok(ParseResult {
-                symbol: NameSequence { names: vec![name] },
+                symbol: Symbol { name, scope: NameSequence{ names: Vec::new() } },
                 symbol_type: Type::None,
             });
         }
@@ -230,13 +232,13 @@ impl<'a> ParserState<'a> {
                 }
                 b'6' => {
                     let access_class = self.read_func_access_class();
-                    let name = self.read_name(false)?;
-                    Type::CXXVFTable(name, access_class)
+                    let scope = self.read_scope()?;
+                    Type::CXXVFTable(scope, access_class)
                 }
                 b'7' => {
                     let access_class = self.read_func_access_class();
-                    let name = self.read_name(false)?;
-                    Type::CXXVBTable(name, access_class)
+                    let scope = self.read_scope()?;
+                    Type::CXXVBTable(scope, access_class)
                 }
                 b'Y' => {
                     // Read a non-member function.
@@ -488,17 +490,22 @@ impl<'a> ParserState<'a> {
         Ok(name)
     }
 
-    // Parses a name in the form of A@B@C@@ which represents C::B::A.
-    fn read_name(&mut self, function: bool) -> Result<NameSequence<'a>> {
-        // println!("read_name on {}", str::from_utf8(self.input)?);
-        let mut names = vec![self.read_unqualified_name(function)?];
+    fn read_scope(&mut self) -> Result<NameSequence<'a>> {
+        let mut names = Vec::new();
         while !self.consume(b"@") {
             // println!("read_name iteration on {}", str::from_utf8(self.input)?);
             let name = self.read_nested_name()?;
             names.push(name);
         }
-
         Ok(NameSequence { names })
+    }
+
+    // Parses a name in the form of A@B@C@@ which represents C::B::A.
+    fn read_name(&mut self, function: bool) -> Result<Symbol<'a>> {
+        // println!("read_name on {}", str::from_utf8(self.input)?);
+        let name = self.read_unqualified_name(function)?;
+
+        Ok(Symbol{name, scope: self.read_scope()? })
     }
 
     fn read_func_ptr(&mut self, sc: StorageClass) -> Result<Type<'a>> {
@@ -1223,7 +1230,7 @@ impl<'a> Serializer<'a> {
                 }
             }
             &Type::CXXVBTable(ref names, _sc) => {
-                self.write_name(names)?;
+                self.write_scope(names)?;
                 write!(self.w, "{}", "\'}")?; // the rest of the "operator"
             }
             &Type::Ptr(ref inner, _sc) | &Type::Ref(ref inner, _sc) => {
@@ -1260,7 +1267,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_class(&mut self, names: &NameSequence, s: &str) -> SerializeResult<()> {
+    fn write_class(&mut self, names: &Symbol, s: &str) -> SerializeResult<()> {
         write!(self.w, "{}", s)?;
         write!(self.w, " ")?;
         self.write_name(names)?;
@@ -1333,60 +1340,73 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
+    fn write_scope(&mut self, names: &NameSequence) -> SerializeResult<()> {
+        // Print out namespaces or outer class names.
+        let mut i = names.names.iter().rev();
+        if let Some(name) = i.next() {
+            self.write_one_name(&name)?;
+
+        }
+        for name in i {
+            write!(self.w, "::")?;
+            self.write_one_name(&name)?;
+
+        }
+        Ok(())
+    }
+
     // Write a name read by read_name().
-    fn write_name(&mut self, names: &NameSequence) -> SerializeResult<()> {
+    fn write_name(&mut self, names: &Symbol) -> SerializeResult<()> {
         self.write_space_pre()?;
 
-        // Print out namespaces or outer class names.
-        for name in names.names.iter().rev().take(names.names.len() - 1) {
-            self.write_one_name(&name)?;
+        self.write_scope(&names.scope)?;
+
+        if !names.scope.names.is_empty() {
             write!(self.w, "::")?;
         }
 
-        if let Some(name) = names.names.first() {
-            match name {
-                &Name::Operator(op) => {
-                    match op {
-                        "ctor" => {
-                            let prev = names.names.iter().nth(1).expect(
-                                "If there's a ctor, there should be another name in this sequence",
-                            );
-                            self.write_one_name(prev)?;
+        match &names.name {
+            &Name::Operator(op) => {
+                match op {
+                    "ctor" => {
+                        let prev = names.scope.names.iter().nth(0).expect(
+                            "If there's a ctor, there should be another name in this sequence",
+                        );
+                        self.write_one_name(prev)?;
+                    }
+                    "dtor" => {
+                        let prev = names.scope.names.iter().nth(0).expect(
+                            "If there's a dtor, there should be another name in this sequence",
+                        );
+                        write!(self.w, "~")?;
+                        self.write_one_name(prev)?;
+                    }
+                    "`vbtable'" => {
+                        write!(self.w, "{}", "`vbtable'{for `")?;
+                        // The rest will be written by write_post of the
+                        // symbol type.
+                    }
+                    _ => {
+                        if self.flags == DemangleFlags::LotsOfWhitespace {
+                            self.write_space()?;
                         }
-                        "dtor" => {
-                            let prev = names.names.iter().nth(1).expect(
-                                "If there's a dtor, there should be another name in this sequence",
-                            );
-                            write!(self.w, "~")?;
-                            self.write_one_name(prev)?;
-                        }
-                        "`vbtable'" => {
-                            write!(self.w, "{}", "`vbtable'{for `")?;
-                            // The rest will be written by write_post of the
-                            // symbol type.
-                        }
-                        _ => {
-                            if self.flags == DemangleFlags::LotsOfWhitespace {
-                                self.write_space()?;
-                            }
-                            // Print out an overloaded operator.
-                            write!(self.w, "{}", op)?;
-                        }
+                        // Print out an overloaded operator.
+                        write!(self.w, "{}", op)?;
                     }
                 }
-                &Name::NonTemplate(ref name) => {
-                    self.w.write(name)?;
-                }
-                &Name::Template(ref name, ref params) => {
-                    self.write_one_name(name)?;
-                    self.write_tmpl_params(&params)?;
-                }
-                &Name::Discriminator(ref val) => {
-                    write!(self.w, "`{}'", val)?;
-                }
-                &Name::ParsedName(ref val) => {
-                    write!(self.w, "{}", serialize(val, self.flags).unwrap())?;
-                }
+            }
+            &Name::NonTemplate(ref name) => {
+                self.w.write(name)?;
+            }
+            &Name::Template(ref name, ref params) => {
+                self.write_one_name(name)?;
+                self.write_tmpl_params(&params)?;
+            }
+            &Name::Discriminator(ref val) => {
+                write!(self.w, "`{}'", val)?;
+            }
+            &Name::ParsedName(ref val) => {
+                write!(self.w, "{}", serialize(val, self.flags).unwrap())?;
             }
         }
         Ok(())
@@ -1488,6 +1508,7 @@ mod tests {
         expect("?cached@?1??GetLong@BinaryPath@mozilla@@SA?AW4nsresult@@QA_W@Z@4_NA",
                "bool `enum nsresult mozilla::BinaryPath::GetLong(wchar_t * const)\'::`2\'::cached");
         expect("??0?$A@_K@B@@QAE@$$QAV01@@Z","B::A<uint64_t>::A<uint64_t>(class B::A<uint64_t> &&)");
+        expect("??_7nsI@@6B@", "const nsI::`vftable\'");
     }
 
     #[test]
