@@ -231,12 +231,12 @@ impl<'a> ParserState<'a> {
                     self.read_var_type(StorageClass::empty())?
                 }
                 b'6' => {
-                    let access_class = self.read_func_access_class();
+                    let access_class = self.read_qualifier();
                     let scope = self.read_scope()?;
                     Type::CXXVFTable(scope, access_class)
                 }
                 b'7' => {
-                    let access_class = self.read_func_access_class();
+                    let access_class = self.read_qualifier();
                     let scope = self.read_scope()?;
                     Type::CXXVBTable(scope, access_class)
                 }
@@ -256,7 +256,7 @@ impl<'a> ParserState<'a> {
                         access_class = StorageClass::empty();
                     } else {
                         let _is_64bit_ptr = self.expect(b"E");
-                        access_class = self.read_func_access_class();
+                        access_class = self.read_qualifier();
                     }
 
                     let _calling_conv = self.read_calling_conv()?;
@@ -654,7 +654,7 @@ impl<'a> ParserState<'a> {
         })
     }
 
-    fn read_func_access_class(&mut self) -> StorageClass {
+    fn read_qualifier(&mut self) -> StorageClass {
         let access_class = match self.peek() {
             Some(b'A') => StorageClass::empty(),
             Some(b'B') => StorageClass::CONST,
@@ -732,7 +732,7 @@ impl<'a> ParserState<'a> {
     }
 
     // Reads a variable type.
-    fn read_var_type(&mut self, sc: StorageClass) -> Result<Type<'a>> {
+    fn read_var_type(&mut self, mut sc: StorageClass) -> Result<Type<'a>> {
         // println!("read_var_type on {}", str::from_utf8(self.input)?);
         if self.consume(b"W4") {
             let name = self.read_name(false)?;
@@ -748,7 +748,7 @@ impl<'a> ParserState<'a> {
             let name = self.read_unqualified_name(true)?;
             self.expect(b"@")?;
             let _is_64bit_ptr = self.expect(b"E")?;
-            let access_class = self.read_func_access_class();
+            let access_class = self.read_qualifier();
             let _calling_conv = self.read_calling_conv()?;
             let storage_class_for_return = self.read_storage_class_for_return()?;
             let return_type = self.read_func_return_type(storage_class_for_return)?;
@@ -775,6 +775,9 @@ impl<'a> ParserState<'a> {
             }
             if self.consume(b"$Q") {
                 return Ok(Type::RValueRef(Box::new(self.read_pointee()?), sc))
+            }
+            if self.consume(b"$C") {
+                sc = self.read_qualifier();
             }
         }
 
@@ -1509,6 +1512,7 @@ mod tests {
                "bool `enum nsresult mozilla::BinaryPath::GetLong(wchar_t * const)\'::`2\'::cached");
         expect("??0?$A@_K@B@@QAE@$$QAV01@@Z","B::A<uint64_t>::A<uint64_t>(class B::A<uint64_t> &&)");
         expect("??_7nsI@@6B@", "const nsI::`vftable\'");
+        expect("??1?$ns@$$CBVtxXP@@@@QAE@XZ", "ns<class txXP const>::~ns<class txXP const>(void)")
     }
 
     #[test]
