@@ -99,6 +99,7 @@ bitflags! {
         const STATIC     = 0b00010000;
         const VIRTUAL    = 0b00100000;
         const FAR        = 0b01000000;
+        const THUNK      = 0b10000000;
     }
 }
 
@@ -648,6 +649,12 @@ impl<'a> ParserState<'a> {
     }
 
     fn read_func_class(&mut self, c: u8) -> Result<FuncClass> {
+        // TODO: need to figure out how to wrap up the adjustment.
+        let mut read_thunk = |func_class| -> Result<FuncClass> {
+            let _adjustment = self.read_number()?;
+            Ok(func_class | FuncClass::THUNK)
+        };
+
         Ok(match c {
             b'A' => FuncClass::PRIVATE,
             b'B' => FuncClass::PRIVATE | FuncClass::FAR,
@@ -655,18 +662,24 @@ impl<'a> ParserState<'a> {
             b'D' => FuncClass::PRIVATE | FuncClass::STATIC,
             b'E' => FuncClass::PRIVATE | FuncClass::VIRTUAL,
             b'F' => FuncClass::PRIVATE | FuncClass::VIRTUAL,
+            b'G' => read_thunk(FuncClass::PRIVATE | FuncClass::VIRTUAL)?,
+            b'H' => read_thunk(FuncClass::PRIVATE | FuncClass::VIRTUAL | FuncClass::FAR)?,
             b'I' => FuncClass::PROTECTED,
             b'J' => FuncClass::PROTECTED | FuncClass::FAR,
             b'K' => FuncClass::PROTECTED | FuncClass::STATIC,
             b'L' => FuncClass::PROTECTED | FuncClass::STATIC | FuncClass::FAR,
             b'M' => FuncClass::PROTECTED | FuncClass::VIRTUAL,
             b'N' => FuncClass::PROTECTED | FuncClass::VIRTUAL | FuncClass::FAR,
+            b'O' => read_thunk(FuncClass::PROTECTED | FuncClass::VIRTUAL)?,
+            b'P' => read_thunk(FuncClass::PROTECTED | FuncClass::VIRTUAL | FuncClass::FAR)?,
             b'Q' => FuncClass::PUBLIC,
             b'R' => FuncClass::PUBLIC | FuncClass::FAR,
             b'S' => FuncClass::PUBLIC | FuncClass::STATIC,
             b'T' => FuncClass::PUBLIC | FuncClass::STATIC | FuncClass::FAR,
             b'U' => FuncClass::PUBLIC | FuncClass::VIRTUAL,
             b'V' => FuncClass::PUBLIC | FuncClass::VIRTUAL | FuncClass::FAR,
+            b'W' => read_thunk(FuncClass::PUBLIC | FuncClass::VIRTUAL)?,
+            b'X' => read_thunk(FuncClass::PUBLIC | FuncClass::VIRTUAL | FuncClass::FAR)?,
             b'Y' => FuncClass::GLOBAL,
             b'Z' => FuncClass::GLOBAL | FuncClass::FAR,
             _ => {
@@ -1063,6 +1076,9 @@ impl<'a> Serializer<'a> {
         let storage_class = match t {
             &Type::None => return Ok(()),
             &Type::MemberFunction(func_class, calling_conv, _, _, ref inner) => {
+                if func_class.contains(FuncClass::THUNK) {
+                    write!(self.w, "[thunk]:")?
+                }
                 if func_class.contains(FuncClass::PRIVATE) {
                     write!(self.w, "private: ")?
                 }
@@ -1611,6 +1627,11 @@ mod tests {
         expect(
             "??_GDynamicFrameEventFilter@?A0xcdaa5fa8@@AAEPAXI@Z",
             "private: void * __thiscall `anonymous namespace`::DynamicFrameEventFilter::`scalar deleting destructor\'(unsigned int)",
+        );
+        /* XXX: undname tacks on `adjustor{16}` to the name. */
+        expect(
+            "?Release@ContentSignatureVerifier@@WBA@AGKXZ",
+            "[thunk]:public: virtual unsigned long __stdcall ContentSignatureVerifier::Release(void)",
         );
     }
 
