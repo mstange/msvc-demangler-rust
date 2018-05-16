@@ -80,7 +80,8 @@ pub enum DemangleFlags {
 }
 
 // Calling conventions
-enum CallingConv {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CallingConv {
     Cdecl,
     Pascal,
     Thiscall,
@@ -90,7 +91,7 @@ enum CallingConv {
 }
 
 bitflags! {
-    struct FuncClass: u32 {
+    pub struct FuncClass: u32 {
         const PUBLIC     = 0b00000001;
         const PROTECTED  = 0b00000010;
         const PRIVATE    = 0b00000100;
@@ -132,9 +133,9 @@ pub struct Symbol<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Type<'a> {
     None,
-    MemberFunction(Params<'a>, StorageClass, Box<Type<'a>>), // StorageClass is for the 'this' pointer
+    MemberFunction(FuncClass, CallingConv, Params<'a>, StorageClass, Box<Type<'a>>), // StorageClass is for the 'this' pointer
     MemberFunctionPointer(Name<'a>, Params<'a>, StorageClass, Box<Type<'a>>),
-    NonMemberFunction(Params<'a>, StorageClass, Box<Type<'a>>),
+    NonMemberFunction(CallingConv, Params<'a>, StorageClass, Box<Type<'a>>),
     CXXVBTable(NameSequence<'a>, StorageClass),
     CXXVFTable(NameSequence<'a>, StorageClass),
     TemplateParameterWithIndex(i32),
@@ -242,11 +243,11 @@ impl<'a> ParserState<'a> {
                 }
                 b'Y' => {
                     // Read a non-member function.
-                    let _ = self.read_calling_conv()?;
+                    let calling_conv = self.read_calling_conv()?;
                     let storage_class = self.read_storage_class_for_return()?;
                     let return_type = self.read_var_type(storage_class)?;
                     let params = self.read_func_params()?;
-                    Type::NonMemberFunction(params, StorageClass::empty(), Box::new(return_type))
+                    Type::NonMemberFunction(calling_conv, params, StorageClass::empty(), Box::new(return_type))
                 }
                 c => {
                     // Read a member function.
@@ -259,11 +260,11 @@ impl<'a> ParserState<'a> {
                         access_class = self.read_qualifier();
                     }
 
-                    let _calling_conv = self.read_calling_conv()?;
+                    let calling_conv = self.read_calling_conv()?;
                     let storage_class_for_return = self.read_storage_class_for_return()?;
                     let return_type = self.read_func_return_type(storage_class_for_return)?;
                     let params = self.read_func_params()?;
-                    Type::MemberFunction(params, access_class, Box::new(return_type))
+                    Type::MemberFunction(func_class, calling_conv, params, access_class, Box::new(return_type))
                 }
             };
             Ok(ParseResult {
@@ -508,12 +509,13 @@ impl<'a> ParserState<'a> {
         Ok(Symbol{name, scope: self.read_scope()? })
     }
 
-    fn read_func_ptr(&mut self, sc: StorageClass) -> Result<Type<'a>> {
+    fn read_func_ptr(&mut self, calling_conv: CallingConv, sc: StorageClass) -> Result<Type<'a>> {
         let return_type = self.read_var_type(StorageClass::empty())?;
         let params = self.read_func_params()?;
 
         Ok(Type::Ptr(
             Box::new(Type::NonMemberFunction(
+                calling_conv,
                 params,
                 StorageClass::empty(),
                 Box::new(return_type),
@@ -740,8 +742,8 @@ impl<'a> ParserState<'a> {
         }
 
         if self.consume(b"P6") {
-            let _ = self.read_calling_conv()?; // TODO: keep around
-            return self.read_func_ptr(sc);
+            let calling_conv = self.read_calling_conv()?;
+            return self.read_func_ptr(calling_conv, sc);
         }
 
         if self.consume(b"P8") {
@@ -1006,12 +1008,56 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
+    fn write_calling_conv(&mut self, calling_conv: CallingConv) -> SerializeResult<()> {
+        if let Some(&b' ') = self.w.last() {
+        } else {
+            write!(self.w, " ")?;
+        }
+        match calling_conv {
+            CallingConv::Cdecl => {
+                write!(self.w, "__cdecl ")?;
+            },
+            CallingConv::Pascal => {
+            },
+            CallingConv::Thiscall => {
+                write!(self.w, "__thiscall ")?;
+            },
+            CallingConv::Stdcall => {
+                write!(self.w, "__stdcall ")?;
+            },
+            CallingConv::Fastcall => {
+                write!(self.w, "__fastcall ")?;
+            },
+            CallingConv::_Regcall => {
+                write!(self.w, "__regcall ")?;
+            },
+        };
+
+        Ok(())
+    }
+
     // Write the "first half" of a given type.
     fn write_pre(&mut self, t: &Type) -> SerializeResult<()> {
         let storage_class = match t {
             &Type::None => return Ok(()),
-            &Type::MemberFunction(_, _, ref inner) => {
+            &Type::MemberFunction(func_class, calling_conv, _, _, ref inner) => {
+                if func_class.contains(FuncClass::PRIVATE) {
+                    write!(self.w, "private: ")?
+                }
+                if func_class.contains(FuncClass::PROTECTED) {
+                    write!(self.w, "protected: ")?
+                }
+                if func_class.contains(FuncClass::PUBLIC) {
+                    write!(self.w, "public: ")?
+                }
+                if func_class.contains(FuncClass::STATIC) {
+                    write!(self.w, "static ")?
+                }
+                if func_class.contains(FuncClass::VIRTUAL) {
+                    write!(self.w, "virtual ")?;
+                }
                 self.write_pre(inner)?;
+                self.write_calling_conv(calling_conv)?;
                 return Ok(());
             }
             &Type::MemberFunctionPointer(ref name, _, _, ref inner) => {
@@ -1027,8 +1073,9 @@ impl<'a> Serializer<'a> {
                 write!(self.w, "::*)")?;
                 return Ok(());
             }
-            &Type::NonMemberFunction(_, _, ref inner) => {
+            &Type::NonMemberFunction(calling_conv, _, _, ref inner) => {
                 self.write_pre(inner)?;
+                self.write_calling_conv(calling_conv)?;
                 return Ok(());
             }
             &Type::CXXVBTable(_, sc) => sc,
@@ -1059,8 +1106,8 @@ impl<'a> Serializer<'a> {
                 // parentheses to supercede the default precedence. (e.g. we want to
                 // emit something like "int (*x)(int)".)
                 match inner.as_ref() {
-                    &Type::MemberFunction(_, _, _)
-                    | &Type::NonMemberFunction(_, _, _)
+                    &Type::MemberFunction(_, _, _, _, _)
+                    | &Type::NonMemberFunction(_, _, _, _)
                     | &Type::Array(_, _, _) => {
                         if self.flags == DemangleFlags::LotsOfWhitespace {
                             self.write_space()?;
@@ -1203,8 +1250,8 @@ impl<'a> Serializer<'a> {
     // Write the "second half" of a given type.
     fn write_post(&mut self, t: &Type) -> SerializeResult<()> {
         match t {
-            &Type::MemberFunction(ref params, sc, ref return_type)
-            | &Type::NonMemberFunction(ref params, sc, ref return_type) => {
+            &Type::MemberFunction(_, _, ref params, sc, ref return_type)
+            | &Type::NonMemberFunction(_, ref params, sc, ref return_type) => {
                 write!(self.w, "(")?;
                 self.write_params(params)?;
                 write!(self.w, ")")?;
@@ -1238,8 +1285,8 @@ impl<'a> Serializer<'a> {
             }
             &Type::Ptr(ref inner, _sc) | &Type::Ref(ref inner, _sc) => {
                 match inner.as_ref() {
-                    &Type::MemberFunction(_, _, _)
-                    | &Type::NonMemberFunction(_, _, _)
+                    &Type::MemberFunction(_, _, _, _, _)
+                    | &Type::NonMemberFunction(_, _, _, _)
                     | &Type::Array(_, _, _) => {
                         write!(self.w, ")")?;
                     }
@@ -1497,22 +1544,42 @@ mod tests {
             expect_with_flags(input, reference, ::DemangleFlags::LotsOfWhitespace);
         };
 
-        expect("?f@@YAHQBH@Z", "int f(int const * const)");
-        expect("?g@@YAHQAY0EA@$$CBH@Z", "int g(int const (* const)[64])");
+        expect("?f@@YAHQBH@Z", "int __cdecl f(int const * const)");
+        expect("?g@@YAHQAY0EA@$$CBH@Z", "int __cdecl g(int const (* const)[64])");
         expect(
             "??0Klass@std@@AEAA@AEBV01@@Z",
-            "std::Klass::Klass(class std::Klass const &)",
+            "private: __cdecl std::Klass::Klass(class std::Klass const &)",
         );
         expect("??0?$Klass@V?$Mass@_N@@@std@@QEAA@AEBV01@@Z",
-               "std::Klass<class Mass<bool> >::Klass<class Mass<bool> >(class std::Klass<class Mass<bool> > const &)");
+               "public: __cdecl std::Klass<class Mass<bool> >::Klass<class Mass<bool> >(class std::Klass<class Mass<bool> > const &)");
         expect("??$load@M@UnsharedOps@js@@SAMV?$SharedMem@PAM@@@Z",
-               "float js::UnsharedOps::load<float>(class SharedMem<float *>)");
+               "public: static float __cdecl js::UnsharedOps::load<float>(class SharedMem<float *>)");
 
         expect("?cached@?1??GetLong@BinaryPath@mozilla@@SA?AW4nsresult@@QA_W@Z@4_NA",
-               "bool `enum nsresult mozilla::BinaryPath::GetLong(wchar_t * const)\'::`2\'::cached");
-        expect("??0?$A@_K@B@@QAE@$$QAV01@@Z","B::A<uint64_t>::A<uint64_t>(class B::A<uint64_t> &&)");
-        expect("??_7nsI@@6B@", "const nsI::`vftable\'");
-        expect("??1?$ns@$$CBVtxXP@@@@QAE@XZ", "ns<class txXP const>::~ns<class txXP const>(void)")
+               "bool `public: static enum nsresult __cdecl mozilla::BinaryPath::GetLong(wchar_t * const)\'::`2\'::cached");
+        expect("??0?$A@_K@B@@QAE@$$QAV01@@Z",
+               "public: __thiscall B::A<uint64_t>::A<uint64_t>(class B::A<uint64_t> &&)");
+        expect("??_7nsI@@6B@",
+               "const nsI::`vftable\'");
+        expect("??1?$ns@$$CBVtxXP@@@@QAE@XZ",
+               "public: __thiscall ns<class txXP const>::~ns<class txXP const>(void)");
+        /* XXX: undname prints void (__thiscall*)(void *) for the parameter type. */
+        expect(
+            "??_I@YGXPAXIIP6EX0@Z@Z",
+            "void __stdcall `vector destructor iterator'(void *,unsigned int,unsigned int,void __thiscall (*)(void *))",
+        );
+        expect(
+            "??_GnsWindowsShellService@@EAEPAXI@Z",
+            "private: virtual void * __thiscall nsWindowsShellService::`scalar deleting destructor'(unsigned int)",
+        );
+        expect(
+            "??1?$nsAutoPtr@$$CBVtxXPathNode@@@@QAE@XZ",
+            "public: __thiscall nsAutoPtr<class txXPathNode const>::~nsAutoPtr<class txXPathNode const>(void)",
+        );
+        expect(
+            "??_EPrintfTarget@mozilla@@MAEPAXI@Z",
+            "protected: virtual void * __thiscall mozilla::PrintfTarget::`vector deleting destructor'(unsigned int)",
+        );
     }
 
     #[test]
@@ -1528,13 +1595,13 @@ mod tests {
         expect("?x@@3PEAY02$$CBHEA", "int const(*x)[3]");
         expect("?x@@3PEAEEA", "unsigned char*x");
         expect("?x@@3PEAY1NKM@5HEA", "int(*x)[3500][6]");
-        expect("?x@@YAXMH@Z", "void x(float,int)");
-        expect("?x@@YAXMH@Z", "void x(float,int)");
-        expect("?x@@3P6AHMNH@ZEA", "int(*x)(float,double,int)");
-        expect("?x@@3P6AHP6AHM@ZN@ZEA", "int(*x)(int(*)(float),double)");
+        expect("?x@@YAXMH@Z", "void __cdecl x(float,int)");
+        expect("?x@@YAXMH@Z", "void __cdecl x(float,int)");
+        expect("?x@@3P6AHMNH@ZEA", "int __cdecl (*x)(float,double,int)");
+        expect("?x@@3P6AHP6AHM@ZN@ZEA", "int __cdecl (*x)(int __cdecl (*)(float),double)");
         expect(
             "?x@@3P6AHP6AHM@Z0@ZEA",
-            "int(*x)(int(*)(float),int(*)(float))",
+            "int __cdecl (*x)(int __cdecl (*)(float),int __cdecl (*)(float))",
         );
 
         expect("?x@ns@@3HA", "int ns::x");
@@ -1560,13 +1627,13 @@ mod tests {
         expect("?instance@@3Vklass@@A", "class klass instance");
         expect(
             "?instance$initializer$@@3P6AXXZEA",
-            "void(*instance$initializer$)(void)",
+            "void __cdecl (*instance$initializer$)(void)",
         );
-        expect("??0klass@@QEAA@XZ", "klass::klass(void)");
-        expect("??1klass@@QEAA@XZ", "klass::~klass(void)");
+        expect("??0klass@@QEAA@XZ", "public: __cdecl klass::klass(void)");
+        expect("??1klass@@QEAA@XZ", "public: __cdecl klass::~klass(void)");
         expect(
             "?x@@YAHPEAVklass@@AEAV1@@Z",
-            "int x(class klass*,class klass&)",
+            "int __cdecl x(class klass*,class klass&)",
         );
         expect(
             "?x@ns@@3PEAV?$klass@HH@1@EA",
@@ -1574,76 +1641,108 @@ mod tests {
         );
         expect(
             "?fn@?$klass@H@ns@@QEBAIXZ",
-            "unsigned int ns::klass<int>::fn(void)const",
+            "public: unsigned int __cdecl ns::klass<int>::fn(void)const",
         );
 
         expect(
             "??4klass@@QEAAAEBV0@AEBV0@@Z",
-            "class klass const&klass::operator=(class klass const&)",
+            "public: class klass const& __cdecl klass::operator=(class klass const&)",
         );
-        expect("??7klass@@QEAA_NXZ", "bool klass::operator!(void)");
+        expect("??7klass@@QEAA_NXZ",
+               "public: bool __cdecl klass::operator!(void)");
         expect(
             "??8klass@@QEAA_NAEBV0@@Z",
-            "bool klass::operator==(class klass const&)",
+            "public: bool __cdecl klass::operator==(class klass const&)",
         );
         expect(
             "??9klass@@QEAA_NAEBV0@@Z",
-            "bool klass::operator!=(class klass const&)",
+            "public: bool __cdecl klass::operator!=(class klass const&)",
         );
-        expect("??Aklass@@QEAAH_K@Z", "int klass::operator[](uint64_t)");
-        expect("??Cklass@@QEAAHXZ", "int klass::operator->(void)");
-        expect("??Dklass@@QEAAHXZ", "int klass::operator*(void)");
-        expect("??Eklass@@QEAAHXZ", "int klass::operator++(void)");
-        expect("??Eklass@@QEAAHH@Z", "int klass::operator++(int)");
-        expect("??Fklass@@QEAAHXZ", "int klass::operator--(void)");
-        expect("??Fklass@@QEAAHH@Z", "int klass::operator--(int)");
-        expect("??Hklass@@QEAAHH@Z", "int klass::operator+(int)");
-        expect("??Gklass@@QEAAHH@Z", "int klass::operator-(int)");
-        expect("??Iklass@@QEAAHH@Z", "int klass::operator&(int)");
-        expect("??Jklass@@QEAAHH@Z", "int klass::operator->*(int)");
-        expect("??Kklass@@QEAAHH@Z", "int klass::operator/(int)");
-        expect("??Mklass@@QEAAHH@Z", "int klass::operator<(int)");
-        expect("??Nklass@@QEAAHH@Z", "int klass::operator<=(int)");
-        expect("??Oklass@@QEAAHH@Z", "int klass::operator>(int)");
-        expect("??Pklass@@QEAAHH@Z", "int klass::operator>=(int)");
-        expect("??Qklass@@QEAAHH@Z", "int klass::operator,(int)");
-        expect("??Rklass@@QEAAHH@Z", "int klass::operator()(int)");
-        expect("??Sklass@@QEAAHXZ", "int klass::operator~(void)");
-        expect("??Tklass@@QEAAHH@Z", "int klass::operator^(int)");
-        expect("??Uklass@@QEAAHH@Z", "int klass::operator|(int)");
-        expect("??Vklass@@QEAAHH@Z", "int klass::operator&&(int)");
-        expect("??Wklass@@QEAAHH@Z", "int klass::operator||(int)");
-        expect("??Xklass@@QEAAHH@Z", "int klass::operator*=(int)");
-        expect("??Yklass@@QEAAHH@Z", "int klass::operator+=(int)");
-        expect("??Zklass@@QEAAHH@Z", "int klass::operator-=(int)");
-        expect("??_0klass@@QEAAHH@Z", "int klass::operator/=(int)");
-        expect("??_1klass@@QEAAHH@Z", "int klass::operator%=(int)");
-        expect("??_2klass@@QEAAHH@Z", "int klass::operator>>=(int)");
-        expect("??_3klass@@QEAAHH@Z", "int klass::operator<<=(int)");
-        expect("??_6klass@@QEAAHH@Z", "int klass::operator^=(int)");
+        expect("??Aklass@@QEAAH_K@Z",
+               "public: int __cdecl klass::operator[](uint64_t)");
+        expect("??Cklass@@QEAAHXZ",
+               "public: int __cdecl klass::operator->(void)");
+        expect("??Dklass@@QEAAHXZ",
+               "public: int __cdecl klass::operator*(void)");
+        expect("??Eklass@@QEAAHXZ",
+               "public: int __cdecl klass::operator++(void)");
+        expect("??Eklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator++(int)");
+        expect("??Fklass@@QEAAHXZ",
+               "public: int __cdecl klass::operator--(void)");
+        expect("??Fklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator--(int)");
+        expect("??Hklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator+(int)");
+        expect("??Gklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator-(int)");
+        expect("??Iklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator&(int)");
+        expect("??Jklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator->*(int)");
+        expect("??Kklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator/(int)");
+        expect("??Mklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator<(int)");
+        expect("??Nklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator<=(int)");
+        expect("??Oklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator>(int)");
+        expect("??Pklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator>=(int)");
+        expect("??Qklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator,(int)");
+        expect("??Rklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator()(int)");
+        expect("??Sklass@@QEAAHXZ",
+               "public: int __cdecl klass::operator~(void)");
+        expect("??Tklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator^(int)");
+        expect("??Uklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator|(int)");
+        expect("??Vklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator&&(int)");
+        expect("??Wklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator||(int)");
+        expect("??Xklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator*=(int)");
+        expect("??Yklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator+=(int)");
+        expect("??Zklass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator-=(int)");
+        expect("??_0klass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator/=(int)");
+        expect("??_1klass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator%=(int)");
+        expect("??_2klass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator>>=(int)");
+        expect("??_3klass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator<<=(int)");
+        expect("??_6klass@@QEAAHH@Z",
+               "public: int __cdecl klass::operator^=(int)");
         expect(
             "??6@YAAEBVklass@@AEBV0@H@Z",
-            "class klass const&operator<<(class klass const&,int)",
+            "class klass const& __cdecl operator<<(class klass const&,int)",
         );
         expect(
             "??5@YAAEBVklass@@AEBV0@_K@Z",
-            "class klass const&operator>>(class klass const&,uint64_t)",
+            "class klass const& __cdecl operator>>(class klass const&,uint64_t)",
         );
         expect(
             "??2@YAPEAX_KAEAVklass@@@Z",
-            "void*operator new(uint64_t,class klass&)",
+            "void* __cdecl operator new(uint64_t,class klass&)",
         );
         expect(
             "??_U@YAPEAX_KAEAVklass@@@Z",
-            "void*operator new[](uint64_t,class klass&)",
+            "void* __cdecl operator new[](uint64_t,class klass&)",
         );
         expect(
             "??3@YAXPEAXAEAVklass@@@Z",
-            "void operator delete(void*,class klass&)",
+            "void __cdecl operator delete(void*,class klass&)",
         );
         expect(
             "??_V@YAXPEAXAEAVklass@@@Z",
-            "void operator delete[](void*,class klass&)",
+            "void __cdecl operator delete[](void*,class klass&)",
         );
     }
 }
