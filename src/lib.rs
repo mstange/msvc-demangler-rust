@@ -110,6 +110,7 @@ pub enum Name<'a> {
     Template(Box<Name<'a>>, Params<'a>),
     Discriminator(i32),
     ParsedName(Box<ParseResult<'a>>),
+    AnonymousNamespace,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -331,6 +332,20 @@ impl<'a> ParserState<'a> {
         }
     }
 
+    fn consume_hex_digit(&mut self) -> bool {
+        match self.peek() {
+            Some(first) => {
+                if char::from(first).is_digit(16) {
+                    self.trim(1);
+                    true
+                } else {
+                    false
+                }
+            },
+            None => false,
+        }
+    }
+
     // Sometimes numbers are encoded in mangled symbols. For example,
     // "int (*x)[20]" is a valid C type (x is a pointer to an array of
     // length 20), so we need some way to embed numbers as part of symbols.
@@ -440,6 +455,13 @@ impl<'a> ParserState<'a> {
                         let name = self.read_template_name()?;
                         self.memorize_name(&name);
                         name
+                    } else if self.consume(b"A") {
+                        // Anonymous namespace.
+                        self.expect(b"0x")?;
+                        while self.consume_hex_digit() {
+                        }
+                        self.expect(b"@")?;
+                        Name::AnonymousNamespace
                     } else {
                         let discriminator = self.read_number()?;
                         Name::Discriminator(discriminator)
@@ -1386,6 +1408,9 @@ impl<'a> Serializer<'a> {
             &Name::ParsedName(ref val) => {
                 write!(self.w, "`{}'", serialize(val, self.flags).unwrap())?;
             }
+            &Name::AnonymousNamespace => {
+                write!(self.w, "`anonymous namespace`")?;
+            }
         }
         Ok(())
     }
@@ -1457,6 +1482,9 @@ impl<'a> Serializer<'a> {
             }
             &Name::ParsedName(ref val) => {
                 write!(self.w, "{}", serialize(val, self.flags).unwrap())?;
+            }
+            &Name::AnonymousNamespace => {
+                panic!("not supposed to be here");
             }
         }
         Ok(())
@@ -1579,6 +1607,10 @@ mod tests {
         expect(
             "??_EPrintfTarget@mozilla@@MAEPAXI@Z",
             "protected: virtual void * __thiscall mozilla::PrintfTarget::`vector deleting destructor'(unsigned int)",
+        );
+        expect(
+            "??_GDynamicFrameEventFilter@?A0xcdaa5fa8@@AAEPAXI@Z",
+            "private: void * __thiscall `anonymous namespace`::DynamicFrameEventFilter::`scalar deleting destructor\'(unsigned int)",
         );
     }
 
