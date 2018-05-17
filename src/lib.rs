@@ -173,6 +173,7 @@ pub enum Type<'a> {
     Ldouble(StorageClass),
     VarArgs,
     EmptyParameterPack,
+    Nullptr,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -820,6 +821,9 @@ impl<'a> ParserState<'a> {
             if self.consume(b"$V") {
                 return Ok(Type::EmptyParameterPack);
             }
+            if self.consume(b"$T") {
+                return Ok(Type::Nullptr);
+            }
         }
 
         if self.consume(b"?") {
@@ -1275,6 +1279,10 @@ impl<'a> Serializer<'a> {
                 write!(self.w, "char16_t")?;
                 sc
             },
+            &Type::Nullptr => {
+                write!(self.w, "std::nullptr_t")?;
+                return Ok(());
+            }
             &Type::EmptyParameterPack => {
                 return Ok(())
             },
@@ -1647,6 +1655,10 @@ mod tests {
         expect(
             "??$new_@VWatchpointMap@js@@$$V@?$MallocProvider@UZone@JS@@@js@@QAEPAVWatchpointMap@1@XZ",
             "public: class js::WatchpointMap * __thiscall js::MallocProvider<struct JS::Zone>::new_<class js::WatchpointMap>(void)",
+        );
+        expect(
+            "??4?$RefPtr@VnsRange@@@@QAEAAV0@$$T@Z",
+            "public: class RefPtr<class nsRange> & __thiscall RefPtr<class nsRange>::operator=(std::nullptr_t)",
         );
     }
 
