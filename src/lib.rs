@@ -172,6 +172,7 @@ pub enum Type<'a> {
     Double(StorageClass),
     Ldouble(StorageClass),
     VarArgs,
+    EmptyParameterPack,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -816,6 +817,9 @@ impl<'a> ParserState<'a> {
             if self.consume(b"$C") {
                 sc = self.read_qualifier();
             }
+            if self.consume(b"$V") {
+                return Ok(Type::EmptyParameterPack);
+            }
         }
 
         if self.consume(b"?") {
@@ -1270,7 +1274,10 @@ impl<'a> Serializer<'a> {
             &Type::Char16(sc) => {
                 write!(self.w, "char16_t")?;
                 sc
-            }
+            },
+            &Type::EmptyParameterPack => {
+                return Ok(())
+            },
         };
 
         if storage_class.contains(StorageClass::CONST) {
@@ -1291,7 +1298,7 @@ impl<'a> Serializer<'a> {
             &Type::MemberFunction(_, _, ref params, sc, ref return_type)
             | &Type::NonMemberFunction(_, ref params, sc, ref return_type) => {
                 write!(self.w, "(")?;
-                self.write_params(params)?;
+                self.write_types(&params.types)?;
                 write!(self.w, ")")?;
 
                 self.write_post(return_type)?;
@@ -1305,7 +1312,7 @@ impl<'a> Serializer<'a> {
             }
             &Type::MemberFunctionPointer(_, ref params, sc, ref return_type) => {
                 write!(self.w, "(")?;
-                self.write_params(params)?;
+                self.write_types(&params.types)?;
                 write!(self.w, ")")?;
 
                 self.write_post(return_type)?;
@@ -1342,13 +1349,13 @@ impl<'a> Serializer<'a> {
     }
 
     // Write a function or template parameter list.
-    fn write_params(&mut self, p: &Params) -> SerializeResult<()> {
-        for param in p.types.iter().take(p.types.len() - 1) {
+    fn write_types(&mut self, types: &[Type]) -> SerializeResult<()> {
+        for param in types.iter().take(types.len() - 1) {
             self.write_pre(param)?;
             self.write_post(param)?;
             write!(self.w, ",")?;
         }
-        if let Some(param) = p.types.last() {
+        if let Some(param) = types.last() {
             self.write_pre(param)?;
             self.write_post(param)?;
         }
@@ -1508,7 +1515,11 @@ impl<'a> Serializer<'a> {
 
     fn write_tmpl_params<'b>(&mut self, params: &Params<'b>) -> SerializeResult<()> {
         write!(self.w, "<")?;
-        self.write_params(params)?;
+        if let Some(&Type::EmptyParameterPack) = params.types.last() {
+            self.write_types(&params.types[0..params.types.len()-1])?;
+        } else {
+            self.write_types(&params.types)?;
+        }
         if let Some(&b'>') = self.w.last() {
             write!(self.w, " ")?;
         }
@@ -1632,6 +1643,10 @@ mod tests {
         expect(
             "?Release@ContentSignatureVerifier@@WBA@AGKXZ",
             "[thunk]:public: virtual unsigned long __stdcall ContentSignatureVerifier::Release(void)",
+        );
+        expect(
+            "??$new_@VWatchpointMap@js@@$$V@?$MallocProvider@UZone@JS@@@js@@QAEPAVWatchpointMap@1@XZ",
+            "public: class js::WatchpointMap * __thiscall js::MallocProvider<struct JS::Zone>::new_<class js::WatchpointMap>(void)",
         );
     }
 
