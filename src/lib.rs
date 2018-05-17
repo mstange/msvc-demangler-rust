@@ -534,19 +534,13 @@ impl<'a> ParserState<'a> {
         Ok(Symbol{name, scope: self.read_scope()? })
     }
 
-    fn read_func_ptr(&mut self, calling_conv: CallingConv, sc: StorageClass) -> Result<Type<'a>> {
+    fn read_func_type(&mut self) -> Result<Type<'a>> {
+        let calling_conv = self.read_calling_conv()?;
         let return_type = self.read_var_type(StorageClass::empty())?;
         let params = self.read_func_params()?;
-
-        Ok(Type::Ptr(
-            Box::new(Type::NonMemberFunction(
-                calling_conv,
-                params,
-                StorageClass::empty(),
-                Box::new(return_type),
-            )),
-            sc,
-        ))
+        return Ok(Type::NonMemberFunction(calling_conv, params,
+                                          StorageClass::empty(),
+                                          Box::new(return_type)));
     }
 
     fn read_operator(&mut self) -> Result<Name<'a>> {
@@ -779,8 +773,8 @@ impl<'a> ParserState<'a> {
         }
 
         if self.consume(b"P6") {
-            let calling_conv = self.read_calling_conv()?;
-            return self.read_func_ptr(calling_conv, sc);
+            let func_type = self.read_func_type()?;
+            return Ok(Type::Ptr(Box::new(func_type), sc));
         }
 
         if self.consume(b"P8") {
@@ -823,6 +817,9 @@ impl<'a> ParserState<'a> {
             }
             if self.consume(b"$T") {
                 return Ok(Type::Nullptr);
+            }
+            if self.consume(b"$A6") {
+                return self.read_func_type();
             }
         }
 
@@ -1597,6 +1594,12 @@ mod tests {
         assert_eq!(demangled, reference);
     }
 
+    // For cases where undname demangles differently/better than we do.
+    fn expect_undname_failure(input: &str, reference: &str) {
+        let demangled: ::Result<_> = ::demangle(input, ::DemangleFlags::LotsOfWhitespace);
+        let reference: ::Result<_> = Ok(reference.to_owned());
+        assert_ne!(demangled, reference);
+    }
     // std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >
     // std::basic_filebuf<char,struct std::char_traits<char> >::"operator ctor"
     // "operator ctor" = ?0
@@ -1659,6 +1662,23 @@ mod tests {
         expect(
             "??4?$RefPtr@VnsRange@@@@QAEAAV0@$$T@Z",
             "public: class RefPtr<class nsRange> & __thiscall RefPtr<class nsRange>::operator=(std::nullptr_t)",
+        );
+        expect(
+            "??1?$function@$$A6AXXZ@std@@QAE@XZ",
+            "public: __thiscall std::function<void __cdecl (void)>::~function<void __cdecl (void)>(void)",
+        );
+        expect_undname_failure(
+            "??1?$function@$$A6AXXZ@std@@QAE@XZ",
+            "public: __thiscall std::function<void __cdecl(void)>::~function<void __cdecl(void)>(void)",
+        );
+        // Not great (`operatorcast`, space at the end), but at least make sure we don't regress.
+        expect(
+            "??B?$function@$$A6AXXZ@std@@QBE_NXZ",
+            "public: bool __thiscall std::function<void __cdecl (void)>::operatorcast(void)const ",
+        );
+        expect_undname_failure(
+            "??B?$function@$$A6AXXZ@std@@QBE_NXZ",
+            "public: __thiscall std::function<void __cdecl(void)>::operator bool(void)const",
         );
     }
 
