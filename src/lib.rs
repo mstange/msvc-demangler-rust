@@ -168,6 +168,7 @@ pub enum Type<'a> {
     Uint64(StorageClass),
     Wchar(StorageClass),
     Char16(StorageClass),
+    Char32(StorageClass),
     Float(StorageClass),
     Double(StorageClass),
     Ldouble(StorageClass),
@@ -875,6 +876,7 @@ impl<'a> ParserState<'a> {
                 b'K' => Type::Uint64(sc),
                 b'W' => Type::Wchar(sc),
                 b'S' => Type::Char16(sc),
+                b'U' => Type::Char32(sc),
                 _ => {
                     return Err(Error::new(format!(
                         "unknown primitive type: {}",
@@ -1279,6 +1281,10 @@ impl<'a> Serializer<'a> {
                 write!(self.w, "char16_t")?;
                 sc
             },
+            &Type::Char32(sc) => {
+                write!(self.w, "char32_t")?;
+                sc
+            },
             &Type::Nullptr => {
                 write!(self.w, "std::nullptr_t")?;
                 return Ok(());
@@ -1608,6 +1614,9 @@ mod tests {
         };
 
         expect("?f@@YAHQBH@Z", "int __cdecl f(int const * const)");
+        expect("?f@@YA_WQB_W@Z", "wchar_t __cdecl f(wchar_t const * const)");
+        expect("?f@@YA_UQB_U@Z", "char32_t __cdecl f(char32_t const * const)");
+        expect("?f@@YA_SQB_S@Z", "char16_t __cdecl f(char16_t const * const)");
         expect("?g@@YAHQAY0EA@$$CBH@Z", "int __cdecl g(int const (* const)[64])");
         expect(
             "??0Klass@std@@AEAA@AEBV01@@Z",
