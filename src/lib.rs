@@ -112,6 +112,9 @@ pub enum Name<'a> {
     Discriminator(i32),
     ParsedName(Box<ParseResult<'a>>),
     AnonymousNamespace,
+    RTTITypeDescriptor(Box<Symbol<'a>>),
+    RTTIClassHierarchyDescriptor(Box<Symbol<'a>>),
+    RTTIBaseClassArray(Box<Symbol<'a>>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -227,6 +230,22 @@ impl<'a> ParserState<'a> {
         // What follows is a main symbol name. This may include
         // namespaces or class names.
         let symbol = self.read_name(true)?;
+
+        match &symbol.name {
+            &Name::RTTITypeDescriptor(_) |
+            &Name::RTTIClassHierarchyDescriptor(_) |
+            &Name::RTTIBaseClassArray(_) => {
+                if self.input.len() != 0 {
+                    return Err(Error::new("Expected end of input after RTTI name!".to_owned()));
+                }
+
+                return Ok(ParseResult {
+                    symbol: symbol,
+                    symbol_type: Type::None,
+                });
+            },
+            _ => {},
+        };
 
         if let Ok(c) = self.get() {
             let symbol_type = match c {
@@ -503,8 +522,37 @@ impl<'a> ParserState<'a> {
             }
             name
         } else if self.consume(b"?") {
-            // Overloaded operator.
-            self.read_operator()?
+            // Overloaded operator.  Handle the RTTI cases here, because
+            // it's easier to do so.
+            if self.consume(b"_R") {
+                match self.get()? {
+                    b'0' => {
+                        let name = self.read_name(false)?;
+                        let name = Name::RTTITypeDescriptor(Box::new(name));
+                        let _ = self.read_var_type(StorageClass::empty());
+                        self.expect(b"@8")?;
+                        name
+                    },
+                    b'2' => {
+                        let name = self.read_name(false)?;
+                        let name = Name::RTTIBaseClassArray(Box::new(name));
+                        self.expect(b"8")?;
+                        name
+                    },
+                    b'3' => {
+                        let name = self.read_name(false)?;
+                        let name = Name::RTTIClassHierarchyDescriptor(Box::new(name));
+                        self.expect(b"8")?;
+                        name
+                    },
+                    _ => return Err(Error::new(format!(
+                        "unknown RTTI operator name: {}", str::from_utf8(orig)?
+                        ))),
+                }
+            }
+            else {
+                self.read_operator()?
+            }
         } else {
             // Non-template functions or classes.
             let name = self.read_string()?;
@@ -517,10 +565,12 @@ impl<'a> ParserState<'a> {
 
     fn read_scope(&mut self) -> Result<NameSequence<'a>> {
         let mut names = Vec::new();
-        while !self.consume(b"@") {
-            // println!("read_name iteration on {}", str::from_utf8(self.input)?);
-            let name = self.read_nested_name()?;
-            names.push(name);
+        if self.input.len() != 0 {
+            while !self.consume(b"@") {
+                // println!("read_name iteration on {}", str::from_utf8(self.input)?);
+                let name = self.read_nested_name()?;
+                names.push(name);
+            }
         }
         Ok(NameSequence { names })
     }
@@ -617,6 +667,7 @@ impl<'a> ParserState<'a> {
                 b'M' => "`eh vector destructor iterator'",
                 b'N' => "`eh vector vbase constructor iterator'",
                 b'O' => "`copy constructor closure'",
+                b'R' => panic!("Should have handled RTTI cases elsewhere"),
                 b'S' => "`local vftable'",
                 b'T' => "`local vftable constructor closure'",
                 b'U' => "operator new[]",
@@ -1433,8 +1484,13 @@ impl<'a> Serializer<'a> {
             }
             &Name::AnonymousNamespace => {
                 write!(self.w, "`anonymous namespace`")?;
+            },
+            &Name::RTTITypeDescriptor(_) |
+            &Name::RTTIClassHierarchyDescriptor(_) |
+            &Name::RTTIBaseClassArray(_) => {
+                panic!("not supposed to be here");
             }
-        }
+        };
         Ok(())
     }
 
@@ -1506,6 +1562,18 @@ impl<'a> Serializer<'a> {
             &Name::ParsedName(ref val) => {
                 write!(self.w, "{}", serialize(val, self.flags).unwrap())?;
             }
+            &Name::RTTITypeDescriptor(ref name) => {
+                self.write_name(&*name)?;
+                write!(self.w, "::`RTTI Type Descriptor'")?;
+            },
+            &Name::RTTIClassHierarchyDescriptor(ref name) => {
+                self.write_name(&*name)?;
+                write!(self.w, "::`RTTI Class Hierarchy Descriptor'")?;
+            },
+            &Name::RTTIBaseClassArray(ref name) => {
+                self.write_name(&*name)?;
+                write!(self.w, "::`RTTI Base Class Array'")?;
+            },
             &Name::AnonymousNamespace => {
                 panic!("not supposed to be here");
             }
@@ -1588,6 +1656,11 @@ mod tests {
         let reference: ::Result<_> = Ok(reference.to_owned());
         assert_eq!(demangled, reference);
     }
+    fn expect_failure(input: &str, reference: &str) {
+        let demangled: ::Result<_> = ::demangle(input, ::DemangleFlags::LotsOfWhitespace);
+        let reference: ::Result<_> = Ok(reference.to_owned());
+        assert_ne!(demangled, reference);
+    }
 
     // std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >
     // std::basic_filebuf<char,struct std::char_traits<char> >::"operator ctor"
@@ -1647,6 +1720,19 @@ mod tests {
         expect(
             "??$new_@VWatchpointMap@js@@$$V@?$MallocProvider@UZone@JS@@@js@@QAEPAVWatchpointMap@1@XZ",
             "public: class js::WatchpointMap * __thiscall js::MallocProvider<struct JS::Zone>::new_<class js::WatchpointMap>(void)",
+        );
+        // We want @8 and have @@@8 at the end.
+        expect_failure(
+            "??_R0?AV?$KxTree@V?$KxSpe@DI@@I@@@8",
+            "class KxTree<class KxSpe<char,unsigned int>,unsigned int>::`RTTI Type Descriptor'",
+        );
+        expect(
+            "??_R2?$KxSet@V?$KxSpe@DI@@I@@8",
+            "KxSet<class KxSpe<char,unsigned int>,unsigned int>::`RTTI Base Class Array'",
+        );
+        expect(
+            "??_R3?$KxSet@V?$KxSpe@DI@@I@@8",
+            "KxSet<class KxSpe<char,unsigned int>,unsigned int>::`RTTI Class Hierarchy Descriptor'",
         );
     }
 
