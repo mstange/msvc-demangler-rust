@@ -1396,7 +1396,16 @@ impl<'a> Serializer<'a> {
             &Type::Array(len, ref inner, _sc) => {
                 write!(self.w, "[{}]", len)?;
                 self.write_post(inner)?;
-            }
+            },
+            &Type::CXXVFTable(ref names, _) => if !names.names.is_empty() {
+                write!(self.w, "{{for ")?;
+                for name in &names.names {
+                    write!(self.w, "`")?;
+                    self.write_one_name(name)?;
+                    write!(self.w, "'")?;
+                }
+                self.w.write(b"}")?;
+            },
             _ => {}
         }
         Ok(())
