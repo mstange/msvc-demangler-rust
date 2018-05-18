@@ -461,8 +461,9 @@ impl<'a> ParserState<'a> {
                         name
                     } else if self.consume(b"A") {
                         // Anonymous namespace.
-                        self.expect(b"0x")?;
-                        while self.consume_hex_digit() {
+                        if self.consume(b"0x") {
+                            while self.consume_hex_digit() {
+                            }
                         }
                         self.expect(b"@")?;
                         Name::AnonymousNamespace
@@ -1641,6 +1642,10 @@ mod tests {
                "public: __thiscall B::A<uint64_t>::A<uint64_t>(class B::A<uint64_t> &&)");
         expect("??_7nsI@@6B@",
                "const nsI::`vftable\'");
+        expect(
+            "??_7W@?A@@6B@",
+            "const `anonymous namespace`::W::`vftable'",
+        );
         expect("??1?$ns@$$CBVtxXP@@@@QAE@XZ",
                "public: __thiscall ns<class txXP const>::~ns<class txXP const>(void)");
         /* XXX: undname prints void (__thiscall*)(void *) for the parameter type. */
