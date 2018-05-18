@@ -1696,6 +1696,14 @@ mod tests {
             "??_7W@?A@@6B@",
             "const `anonymous namespace`::W::`vftable'",
         );
+        expect(
+            "??_7?$RunnableMethodImpl@PEAVLazyIdleThread@mozilla@@P812@EAAXXZ$0A@$0A@$$V@detail@mozilla@@6BnsIRunnable@@@",
+            "const mozilla::detail::RunnableMethodImpl<class mozilla::LazyIdleThread *,void __cdecl (mozilla::LazyIdleThread::*)(void),0,0>::`vftable\'{for `nsIRunnable\'}",
+        );
+        expect_undname_failure(
+            "??_7?$RunnableMethodImpl@PEAVLazyIdleThread@mozilla@@P812@EAAXXZ$0A@$0A@$$V@detail@mozilla@@6BnsIRunnable@@@",
+            "const mozilla::detail::RunnableMethodImpl<class mozilla::LazyIdleThread * __ptr64,void __cdecl (mozilla::LazyIdleThread::*)(void) __ptr64,0,0>::`vftable\'{for `nsIRunnable\'}",
+        );
         expect("??1?$ns@$$CBVtxXP@@@@QAE@XZ",
                "public: __thiscall ns<class txXP const>::~ns<class txXP const>(void)");
         /* XXX: undname prints void (__thiscall*)(void *) for the parameter type. */
