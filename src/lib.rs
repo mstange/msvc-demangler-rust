@@ -1531,14 +1531,18 @@ impl<'a> Serializer<'a> {
     }
 
     fn write_tmpl_params<'b>(&mut self, params: &Params<'b>) -> SerializeResult<()> {
-        write!(self.w, "<")?;
-        if let Some(&Type::EmptyParameterPack) = params.types.last() {
-            self.write_types(&params.types[0..params.types.len()-1])?;
+        let types = if let Some(&Type::EmptyParameterPack) = params.types.last() {
+            &params.types[0..params.types.len()-1]
         } else {
-            self.write_types(&params.types)?;
-        }
-        if let Some(&b'>') = self.w.last() {
-            write!(self.w, " ")?;
+            &params.types
+        };
+
+        write!(self.w, "<")?;
+        if !types.is_empty() {
+            self.write_types(types)?;
+            if let Some(&b'>') = self.w.last() {
+                write!(self.w, " ")?;
+            }
         }
         write!(self.w, ">")?;
         Ok(())
@@ -1677,6 +1681,10 @@ mod tests {
         expect(
             "??$new_@VWatchpointMap@js@@$$V@?$MallocProvider@UZone@JS@@@js@@QAEPAVWatchpointMap@1@XZ",
             "public: class js::WatchpointMap * __thiscall js::MallocProvider<struct JS::Zone>::new_<class js::WatchpointMap>(void)",
+        );
+        expect(
+            "??$templ_fun_with_ty_pack@$$V@@YAXXZ",
+            "void __cdecl templ_fun_with_ty_pack<>(void)",
         );
         expect(
             "??4?$RefPtr@VnsRange@@@@QAEAAV0@$$T@Z",
