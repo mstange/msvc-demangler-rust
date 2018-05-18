@@ -139,7 +139,7 @@ pub struct Symbol<'a> {
 pub enum Type<'a> {
     None,
     MemberFunction(FuncClass, CallingConv, Params<'a>, StorageClass, Box<Type<'a>>), // StorageClass is for the 'this' pointer
-    MemberFunctionPointer(Symbol<'a>, CallingConv, Params<'a>, StorageClass, Box<Type<'a>>),
+    MemberFunctionPointer(Symbol<'a>, FuncClass, CallingConv, Params<'a>, StorageClass, Box<Type<'a>>),
     NonMemberFunction(CallingConv, Params<'a>, StorageClass, Box<Type<'a>>),
     CXXVBTable(NameSequence<'a>, StorageClass),
     CXXVFTable(NameSequence<'a>, StorageClass),
@@ -848,6 +848,29 @@ impl<'a> ParserState<'a> {
         })
     }
 
+    fn read_member_function_pointer(&mut self, read_qualifiers: bool) -> Result<Type<'a>> {
+        let symbol = self.read_name(true)?;
+        let _is_64bit_ptr = self.consume(b"E");
+        let (access_class, func_class) = if read_qualifiers {
+            (self.read_qualifier(), FuncClass::empty())
+        } else {
+            let c = self.get()?;
+            (StorageClass::empty(), self.read_func_class(c)?)
+        };
+        let calling_conv = self.read_calling_conv()?;
+        let storage_class_for_return = self.read_storage_class_for_return()?;
+        let return_type = self.read_func_return_type(storage_class_for_return)?;
+        let params = self.read_func_params()?;
+        Ok(Type::MemberFunctionPointer(
+            symbol,
+            func_class,
+            calling_conv,
+            params,
+            access_class,
+            Box::new(return_type),
+        ))
+    }
+
     // Reads a variable type.
     fn read_var_type(&mut self, mut sc: StorageClass) -> Result<Type<'a>> {
         // println!("read_var_type on {}", str::from_utf8(self.input)?);
@@ -867,20 +890,7 @@ impl<'a> ParserState<'a> {
         }
 
         if self.consume(b"P8") {
-            let symbol = self.read_name(true)?;
-            let _is_64bit_ptr = self.expect(b"E")?;
-            let access_class = self.read_qualifier();
-            let calling_conv = self.read_calling_conv()?;
-            let storage_class_for_return = self.read_storage_class_for_return()?;
-            let return_type = self.read_func_return_type(storage_class_for_return)?;
-            let params = self.read_func_params()?;
-            return Ok(Type::MemberFunctionPointer(
-                symbol,
-                calling_conv,
-                params,
-                access_class,
-                Box::new(return_type),
-            ));
+            return self.read_member_function_pointer(true);
         }
 
         if self.consume(b"$") {
@@ -898,9 +908,6 @@ impl<'a> ParserState<'a> {
             if self.consume(b"$Q") {
                 return Ok(Type::RValueRef(Box::new(self.read_pointee()?), sc))
             }
-            if self.consume(b"$C") {
-                sc = self.read_qualifier();
-            }
             if self.consume(b"$V") {
                 return Ok(Type::EmptyParameterPack);
             }
@@ -909,6 +916,20 @@ impl<'a> ParserState<'a> {
             }
             if self.consume(b"$A6") {
                 return self.read_func_type();
+            }
+            // These next cases can fallthrough, so be careful adding new ones!
+            if self.consume(b"$C") {
+                sc = self.read_qualifier();
+            } else if let Some(x) = self.peek() {
+                match x {
+                    // Inheritance specifiers, which we don't need to remember.
+                    b'1' | b'H' | b'I' | b'J' => {
+                        self.trim(1);
+                        self.expect(b"?")?;
+                        return self.read_member_function_pointer(false);
+                    },
+                    _ => {},
+                };
             }
         }
 
@@ -1193,7 +1214,7 @@ impl<'a> Serializer<'a> {
                 self.write_calling_conv(calling_conv)?;
                 return Ok(());
             }
-            &Type::MemberFunctionPointer(ref symbol, calling_conv, _, _, ref inner) => {
+            &Type::MemberFunctionPointer(ref symbol, _, calling_conv, _, _, ref inner) => {
                 self.write_pre(inner)?;
                 self.write_calling_conv(calling_conv)?;
                 if self.flags == DemangleFlags::LotsOfWhitespace {
@@ -1437,7 +1458,7 @@ impl<'a> Serializer<'a> {
 
                 self.write_memfn_qualifiers(sc)?;
             }
-            &Type::MemberFunctionPointer(_, _, ref params, sc, ref return_type) => {
+            &Type::MemberFunctionPointer(_, _, _, ref params, sc, ref return_type) => {
                 write!(self.w, "(")?;
                 self.write_types(&params.types)?;
                 write!(self.w, ")")?;
@@ -1849,6 +1870,18 @@ mod tests {
         expect_undname_failure(
             "?foo@A@PR19361@@QIHAEXXZ",
             "public: void __thiscall PR19361::A::foo(void) __restrict&& ",
+        );
+        expect(
+            "??$GenericCreateConstructor@$1?construct@SetObject@js@@CA_NPEAUJSContext@@IPEATValue@JS@@@Z$0A@$0A@$0A@@js@@YAPEAVJSObject@@PEAUJSContext@@W4JSProtoKey@@@Z",
+            "class JSObject * __cdecl js::GenericCreateConstructor<bool __cdecl (js::SetObject::construct::*)(struct JSContext *,unsigned int,union JS::Value *),0,0,0>(struct JSContext *,enum JSProtoKey)",
+        );
+        expect_undname_failure(
+            "??$GenericCreateConstructor@$1?construct@SetObject@js@@CA_NPEAUJSContext@@IPEATValue@JS@@@Z$0A@$0A@$0A@@js@@YAPEAVJSObject@@PEAUJSContext@@W4JSProtoKey@@@Z",
+            "class JSObject * __ptr64 __cdecl js::GenericCreateConstructor<&private: static bool __cdecl (js::SetObject::construct::*)(struct JSContext * __ptr64,unsigned int,union JS::Value * __ptr64),0,0,0>(struct JSContext * __ptr64,enum JSProtoKey)",
+        );
+        expect(
+            "??$emplace_hint@AEBUpiecewise_construct_t@std@@V?$tuple@AEBH@2@V?$tuple@$$V@2@@?$_Tree@V?$_Tmap_traits@HUPayload@RtpUtility@webrtc@@U?$less@H@std@@V?$allocator@U?$pair@$$CBHUPayload@RtpUtility@webrtc@@@std@@@5@$0A@@std@@@std@@QEAA?AV?$_Tree_iterator@V?$_Tree_val@U?$_Tree_simple_types@U?$pair@$$CBHUPayload@RtpUtility@webrtc@@@std@@@std@@@std@@@1@V?$_Tree_const_iterator@V?$_Tree_val@U?$_Tree_simple_types@U?$pair@$$CBHUPayload@RtpUtility@webrtc@@@std@@@std@@@std@@@1@AEBUpiecewise_construct_t@1@$$QEAV?$tuple@AEBH@1@$$QEAV?$tuple@$$V@1@@Z",
+            "public: class std::_Tree_iterator<class std::_Tree_val<struct std::_Tree_simple_types<struct std::pair<int const,struct webrtc::RtpUtility::Payload> > > > __cdecl std::_Tree<class std::_Tmap_traits<int,struct webrtc::RtpUtility::Payload,struct std::less<int>,class std::allocator<struct std::pair<int const,struct webrtc::RtpUtility::Payload> >,0> >::emplace_hint<struct std::piecewise_construct_t const &,class std::tuple<int const &>,class std::tuple<> >(class std::_Tree_const_iterator<class std::_Tree_val<struct std::_Tree_simple_types<struct std::pair<int const,struct webrtc::RtpUtility::Payload> > > >,struct std::piecewise_construct_t const &,class std::tuple<int const &> &&,class std::tuple<> &&)",
         );
     }
 
