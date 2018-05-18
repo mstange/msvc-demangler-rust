@@ -773,6 +773,11 @@ impl<'a> ParserState<'a> {
             return Ok(Type::Enum(name, sc));
         }
 
+        if self.consume(b"A6") {
+            let func_type = self.read_func_type()?;
+            return Ok(Type::Ref(Box::new(func_type), sc));
+        }
+
         if self.consume(b"P6") {
             let func_type = self.read_func_type()?;
             return Ok(Type::Ptr(Box::new(func_type), sc));
@@ -1688,6 +1693,14 @@ mod tests {
         expect_undname_failure(
             "??B?$function@$$A6AXXZ@std@@QBE_NXZ",
             "public: __thiscall std::function<void __cdecl(void)>::operator bool(void)const",
+        );
+        expect(
+            "??$?RA6AXXZ$$V@SkOnce@@QAEXA6AXXZ@Z",
+            "public: void __thiscall SkOnce::operator()<void __cdecl (&)(void)>(void __cdecl (&)(void))",
+        );
+        expect_undname_failure(
+            "??$?RA6AXXZ$$V@SkOnce@@QAEXA6AXXZ@Z",
+            "public: void __thiscall SkOnce::operator()<void (__cdecl&)(void)>(void (__cdecl&)(void))",
         );
     }
 
