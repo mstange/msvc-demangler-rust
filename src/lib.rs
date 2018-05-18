@@ -64,12 +64,14 @@ pub type Result<T> = result::Result<T, Error>;
 
 bitflags! {
     pub struct StorageClass: u32 {
-        const CONST      = 0b00000001;
-        const VOLATILE   = 0b00000010;
-        const FAR        = 0b00000100;
-        const HUGE       = 0b00001000;
-        const UNALIGNED  = 0b00010000;
-        const RESTRICT   = 0b00100000;
+        const CONST       = 0b00000001;
+        const VOLATILE    = 0b00000010;
+        const FAR         = 0b00000100;
+        const HUGE        = 0b00001000;
+        const UNALIGNED   = 0b00010000;
+        const RESTRICT    = 0b00100000;
+        const LVALUE_QUAL = 0b01000000;
+        const RVALUE_QUAL = 0b10000000;
     }
 }
 
@@ -262,7 +264,23 @@ impl<'a> ParserState<'a> {
                         access_class = StorageClass::empty();
                     } else {
                         let _is_64bit_ptr = self.expect(b"E");
-                        access_class = self.read_qualifier();
+                        let restrict = if self.consume(b"I") {
+                            StorageClass::RESTRICT
+                        } else {
+                            StorageClass::empty()
+                        };
+                        let ref_qualifiers = match self.peek() {
+                            Some(b'G') => {
+                                self.expect(b"G").unwrap();
+                                StorageClass::LVALUE_QUAL
+                            },
+                            Some(b'H') => {
+                                self.expect(b"H").unwrap();
+                                StorageClass::RVALUE_QUAL
+                            },
+                            _ => StorageClass::empty(),
+                        };
+                        access_class = self.read_qualifier() | restrict | ref_qualifiers;
                     }
 
                     let calling_conv = self.read_calling_conv()?;
@@ -1309,6 +1327,29 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
+    fn write_memfn_qualifiers(&mut self, sc: StorageClass) -> SerializeResult<()> {
+        let mut write_one_qual = |flag, s| -> SerializeResult<()> {
+            if sc.contains(flag) {
+                self.w.write(s)?;
+                if self.flags == DemangleFlags::LotsOfWhitespace {
+                    self.write_space()?;
+                }
+            }
+
+            Ok(())
+        };
+
+        // TODO: DemangleFlags::LessWhitespace means we run all these together.
+        write_one_qual(StorageClass::CONST, b"const")?;
+        // __restrict is different than `restrict`, keep the underscores!
+        write_one_qual(StorageClass::RESTRICT, b"__restrict")?;
+        // TODO: undname prints ref-qualifiers tightly to previous qualifiers.
+        write_one_qual(StorageClass::LVALUE_QUAL, b"&")?;
+        write_one_qual(StorageClass::RVALUE_QUAL, b"&&")?;
+
+        Ok(())
+    }
+
     // Write the "second half" of a given type.
     fn write_post(&mut self, t: &Type) -> SerializeResult<()> {
         match t {
@@ -1320,12 +1361,7 @@ impl<'a> Serializer<'a> {
 
                 self.write_post(return_type)?;
 
-                if sc.contains(StorageClass::CONST) {
-                    write!(self.w, "const")?;
-                    if self.flags == DemangleFlags::LotsOfWhitespace {
-                        self.write_space()?;
-                    }
-                }
+                self.write_memfn_qualifiers(sc)?;
             }
             &Type::MemberFunctionPointer(_, ref params, sc, ref return_type) => {
                 write!(self.w, "(")?;
@@ -1714,6 +1750,14 @@ mod tests {
         expect_undname_failure(
             "??$?RA6AXXZ$$V@SkOnce@@QAEXA6AXXZ@Z",
             "public: void __thiscall SkOnce::operator()<void (__cdecl&)(void)>(void (__cdecl&)(void))",
+        );
+        expect(
+            "?foo@A@PR19361@@QIHAEXXZ",
+            "public: void __thiscall PR19361::A::foo(void)__restrict && ",
+        );
+        expect_undname_failure(
+            "?foo@A@PR19361@@QIHAEXXZ",
+            "public: void __thiscall PR19361::A::foo(void) __restrict&& ",
         );
     }
 
