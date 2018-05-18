@@ -6,6 +6,7 @@
 #[macro_use]
 extern crate bitflags;
 
+use std::cmp::min;
 use std::io::Write;
 use std::result;
 use std::str;
@@ -145,6 +146,7 @@ pub enum Type<'a> {
     TemplateParameterWithIndex(i32),
     ThreadSafeStaticGuard(i32),
     Constant(i32),
+    ConstantString(Vec<u8>),
     Ptr(Box<Type<'a>>, StorageClass),
     Ref(Box<Type<'a>>, StorageClass),
     RValueRef(Box<Type<'a>>, StorageClass),
@@ -256,6 +258,17 @@ impl<'a> ParserState<'a> {
                     let params = self.read_func_params()?;
                     Type::NonMemberFunction(calling_conv, params, StorageClass::empty(), Box::new(return_type))
                 }
+                b'_' => {
+                    // Read an encoded string.
+                    let char_bytes = match self.get()? {
+                        b'0' => 1, // char
+                        b'1' => 2, // wchar_t
+                        _ => {
+                            return Err(Error::new("unknown string character type".to_owned()));
+                        },
+                    };
+                    self.read_encoded_string(char_bytes)?
+                }
                 c => {
                     // Read a member function.
                     let func_class = self.read_func_class(c)?;
@@ -366,6 +379,56 @@ impl<'a> ParserState<'a> {
             },
             None => false,
         }
+    }
+
+    fn read_encoded_string(&mut self, char_bytes: i32) -> Result<Type<'a>> {
+        let byte_length = self.read_number()?; // including null terminator
+        let _crc = self.read_number()?;
+        let bytes = min(byte_length, char_bytes * 32);
+
+        let mut collected = vec!();
+        for _i in 0..bytes {
+            let c = self.get()?;
+            let byte: u8 = match c {
+                b'0'...b'9' | b'a'...b'z' | b'A'...b'Z' | b'_' | b'$' => {
+                    c
+                }
+                b'?' => {
+                    let c = self.get()?;
+                    match c {
+                        b'A'...b'Z' => {
+                            c - b'A' + 0xe1
+                        }
+                        b'a'...b'z' => {
+                            c - b'A' + 0xc1
+                        }
+                        b'0'...b'9' => {
+                            let v = &[b',', b'/', b'\\', b':', b'.',
+                                      b' ', b'\n', b'\t', b'\'', b'-'];
+                            v[(c - b'0') as usize]
+                        }
+                        b'$' => {
+                            let high = self.get()? - b'A';
+                            let low = self.get()? - b'A';
+                            high << 4 | low
+                        }
+                        _ => {
+                            return Err(Error::new(format!(
+                                "unknown escaped encoded string character {}",
+                                char::from(c))));
+                        }
+                    }
+                }
+                _ => {
+                    return Err(Error::new(format!(
+                        "unknown escaped encoded string character {}",
+                        char::from(c))));
+                }
+            };
+            collected.push(byte);
+        }
+
+        Ok(Type::ConstantString(collected))
     }
 
     // Sometimes numbers are encoded in mangled symbols. For example,
@@ -620,6 +683,7 @@ impl<'a> ParserState<'a> {
                 b'9' => "`vcall'",
                 b'A' => "`typeof'",
                 b'B' => "`local static guard'",
+                b'C' => "`string'",
                 b'D' => "`vbase destructor'",
                 b'E' => "`vector deleting destructor'",
                 b'F' => "`default constructor closure'",
@@ -1160,6 +1224,15 @@ impl<'a> Serializer<'a> {
             }
             &Type::Constant(n) => {
                 write!(self.w, "{}", n)?;
+                return Ok(());
+            }
+            &Type::ConstantString(_) => {
+                // We have no idea what the original encoding of the string is,
+                // and undname doesn't even try to display anything.
+                //match str::from_utf8(s).ok() {
+                //  Some(ref s) => write!(self.w, "{}", s)?,
+                //  None => {},
+                //}
                 return Ok(());
             }
             &Type::VarArgs => {
@@ -1777,6 +1850,385 @@ mod tests {
             "?foo@A@PR19361@@QIHAEXXZ",
             "public: void __thiscall PR19361::A::foo(void) __restrict&& ",
         );
+    }
+
+    #[test]
+    fn test_strings() {
+        let expect = |input, reference| {
+            expect_with_flags(input, reference, ::DemangleFlags::LotsOfWhitespace);
+        };
+
+        // Test symbols extracted from clang's test/CodeGenCXX/mangle-ms-string-literals.cpp.
+        // Even though we don't print the encoded strings, these tests
+        // exhaustively cover all the cases we'll run into.
+
+        // Single-byte characters.
+        expect("??_C@_01CNACBAHC@?$PP?$AA@", "`string'");
+        expect("??_C@_01DEBJCBDD@?$PO?$AA@", "`string'");
+        expect("??_C@_01BPDEHCPA@?$PN?$AA@", "`string'");
+        expect("??_C@_01GCPEDLB@?$PM?$AA@", "`string'");
+        expect("??_C@_01EJGONFHG@?$PL?$AA@", "`string'");
+        expect("??_C@_01FAHFOEDH@?z?$AA@", "`string'");
+        expect("??_C@_01HLFILHPE@?y?$AA@", "`string'");
+        expect("??_C@_01GCEDIGLF@?x?$AA@", "`string'");
+        expect("??_C@_01OFNLJKHK@?w?$AA@", "`string'");
+        expect("??_C@_01PMMAKLDL@?v?$AA@", "`string'");
+        expect("??_C@_01NHONPIPI@?u?$AA@", "`string'");
+        expect("??_C@_01MOPGMJLJ@?t?$AA@", "`string'");
+        expect("??_C@_01IBLHFPHO@?s?$AA@", "`string'");
+        expect("??_C@_01JIKMGODP@?r?$AA@", "`string'");
+        expect("??_C@_01LDIBDNPM@?q?$AA@", "`string'");
+        expect("??_C@_01KKJKAMLN@?p?$AA@", "`string'");
+        expect("??_C@_01GHMAACCD@?o?$AA@", "`string'");
+        expect("??_C@_01HONLDDGC@?n?$AA@", "`string'");
+        expect("??_C@_01FFPGGAKB@?m?$AA@", "`string'");
+        expect("??_C@_01EMONFBOA@?l?$AA@", "`string'");
+        expect("??_C@_01DKMMHCH@?k?$AA@", "`string'");
+        expect("??_C@_01BKLHPGGG@?j?$AA@", "`string'");
+        expect("??_C@_01DBJKKFKF@?i?$AA@", "`string'");
+        expect("??_C@_01CIIBJEOE@?h?$AA@", "`string'");
+        expect("??_C@_01KPBJIICL@?g?$AA@", "`string'");
+        expect("??_C@_01LGACLJGK@?f?$AA@", "`string'");
+        expect("??_C@_01JNCPOKKJ@?e?$AA@", "`string'");
+        expect("??_C@_01IEDENLOI@?d?$AA@", "`string'");
+        expect("??_C@_01MLHFENCP@?c?$AA@", "`string'");
+        expect("??_C@_01NCGOHMGO@?b?$AA@", "`string'");
+        expect("??_C@_01PJEDCPKN@?a?$AA@", "`string'");
+        expect("??_C@_01OAFIBOOM@?$OA?$AA@", "`string'");
+        expect("??_C@_01LIIGDENA@?$NP?$AA@", "`string'");
+        expect("??_C@_01KBJNAFJB@?$NO?$AA@", "`string'");
+        expect("??_C@_01IKLAFGFC@?$NN?$AA@", "`string'");
+        expect("??_C@_01JDKLGHBD@?$NM?$AA@", "`string'");
+        expect("??_C@_01NMOKPBNE@?$NL?$AA@", "`string'");
+        expect("??_C@_01MFPBMAJF@?Z?$AA@", "`string'");
+        expect("??_C@_01OONMJDFG@?Y?$AA@", "`string'");
+        expect("??_C@_01PHMHKCBH@?X?$AA@", "`string'");
+        expect("??_C@_01HAFPLONI@?W?$AA@", "`string'");
+        expect("??_C@_01GJEEIPJJ@?V?$AA@", "`string'");
+        expect("??_C@_01ECGJNMFK@?U?$AA@", "`string'");
+        expect("??_C@_01FLHCONBL@?T?$AA@", "`string'");
+        expect("??_C@_01BEDDHLNM@?S?$AA@", "`string'");
+        expect("??_C@_01NCIEKJN@?R?$AA@", "`string'");
+        expect("??_C@_01CGAFBJFO@?Q?$AA@", "`string'");
+        expect("??_C@_01DPBOCIBP@?P?$AA@", "`string'");
+        expect("??_C@_01PCEECGIB@?O?$AA@", "`string'");
+        expect("??_C@_01OLFPBHMA@?N?$AA@", "`string'");
+        expect("??_C@_01MAHCEEAD@?M?$AA@", "`string'");
+        expect("??_C@_01NJGJHFEC@?L?$AA@", "`string'");
+        expect("??_C@_01JGCIODIF@?K?$AA@", "`string'");
+        expect("??_C@_01IPDDNCME@?J?$AA@", "`string'");
+        expect("??_C@_01KEBOIBAH@?I?$AA@", "`string'");
+        expect("??_C@_01LNAFLAEG@?H?$AA@", "`string'");
+        expect("??_C@_01DKJNKMIJ@?G?$AA@", "`string'");
+        expect("??_C@_01CDIGJNMI@?F?$AA@", "`string'");
+        expect("??_C@_01IKLMOAL@?E?$AA@", "`string'");
+        expect("??_C@_01BBLAPPEK@?D?$AA@", "`string'");
+        expect("??_C@_01FOPBGJIN@?C?$AA@", "`string'");
+        expect("??_C@_01EHOKFIMM@?B?$AA@", "`string'");
+        expect("??_C@_01GMMHALAP@?A?$AA@", "`string'");
+        expect("??_C@_01HFNMDKEO@?$MA?$AA@", "`string'");
+        expect("??_C@_01NNHLFPHH@?$LP?$AA@", "`string'");
+        expect("??_C@_01MEGAGODG@?$LO?$AA@", "`string'");
+        expect("??_C@_01OPENDNPF@?$LN?$AA@", "`string'");
+        expect("??_C@_01PGFGAMLE@?$LM?$AA@", "`string'");
+        expect("??_C@_01LJBHJKHD@?$LL?$AA@", "`string'");
+        expect("??_C@_01KAAMKLDC@?$LK?$AA@", "`string'");
+        expect("??_C@_01ILCBPIPB@?$LJ?$AA@", "`string'");
+        expect("??_C@_01JCDKMJLA@?$LI?$AA@", "`string'");
+        expect("??_C@_01BFKCNFHP@?$LH?$AA@", "`string'");
+        expect("??_C@_01MLJOEDO@?$LG?$AA@", "`string'");
+        expect("??_C@_01CHJELHPN@?$LF?$AA@", "`string'");
+        expect("??_C@_01DOIPIGLM@?$LE?$AA@", "`string'");
+        expect("??_C@_01HBMOBAHL@?$LD?$AA@", "`string'");
+        expect("??_C@_01GINFCBDK@?$LC?$AA@", "`string'");
+        expect("??_C@_01EDPIHCPJ@?$LB?$AA@", "`string'");
+        expect("??_C@_01FKODEDLI@?$LA?$AA@", "`string'");
+        expect("??_C@_01JHLJENCG@?$KP?$AA@", "`string'");
+        expect("??_C@_01IOKCHMGH@?$KO?$AA@", "`string'");
+        expect("??_C@_01KFIPCPKE@?$KN?$AA@", "`string'");
+        expect("??_C@_01LMJEBOOF@?$KM?$AA@", "`string'");
+        expect("??_C@_01PDNFIICC@?$KL?$AA@", "`string'");
+        expect("??_C@_01OKMOLJGD@?$KK?$AA@", "`string'");
+        expect("??_C@_01MBODOKKA@?$KJ?$AA@", "`string'");
+        expect("??_C@_01NIPINLOB@?$KI?$AA@", "`string'");
+        expect("??_C@_01FPGAMHCO@?$KH?$AA@", "`string'");
+        expect("??_C@_01EGHLPGGP@?$KG?$AA@", "`string'");
+        expect("??_C@_01GNFGKFKM@?$KF?$AA@", "`string'");
+        expect("??_C@_01HEENJEON@?$KE?$AA@", "`string'");
+        expect("??_C@_01DLAMACCK@?$KD?$AA@", "`string'");
+        expect("??_C@_01CCBHDDGL@?$KC?$AA@", "`string'");
+        expect("??_C@_01JDKGAKI@?$KB?$AA@", "`string'");
+        expect("??_C@_01BACBFBOJ@?$KA?$AA@", "`string'");
+        expect("??_C@_01EIPPHLNF@?$JP?$AA@", "`string'");
+        expect("??_C@_01FBOEEKJE@?$JO?$AA@", "`string'");
+        expect("??_C@_01HKMJBJFH@?$JN?$AA@", "`string'");
+        expect("??_C@_01GDNCCIBG@?$JM?$AA@", "`string'");
+        expect("??_C@_01CMJDLONB@?$JL?$AA@", "`string'");
+        expect("??_C@_01DFIIIPJA@?$JK?$AA@", "`string'");
+        expect("??_C@_01BOKFNMFD@?$JJ?$AA@", "`string'");
+        expect("??_C@_01HLOONBC@?$JI?$AA@", "`string'");
+        expect("??_C@_01IACGPBNN@?$JH?$AA@", "`string'");
+        expect("??_C@_01JJDNMAJM@?$JG?$AA@", "`string'");
+        expect("??_C@_01LCBAJDFP@?$JF?$AA@", "`string'");
+        expect("??_C@_01KLALKCBO@?$JE?$AA@", "`string'");
+        expect("??_C@_01OEEKDENJ@?$JD?$AA@", "`string'");
+        expect("??_C@_01PNFBAFJI@?$JC?$AA@", "`string'");
+        expect("??_C@_01NGHMFGFL@?$JB?$AA@", "`string'");
+        expect("??_C@_01MPGHGHBK@?$JA?$AA@", "`string'");
+        expect("??_C@_01CDNGJIE@?$IP?$AA@", "`string'");
+        expect("??_C@_01BLCGFIMF@?$IO?$AA@", "`string'");
+        expect("??_C@_01DAALALAG@?$IN?$AA@", "`string'");
+        expect("??_C@_01CJBADKEH@?$IM?$AA@", "`string'");
+        expect("??_C@_01GGFBKMIA@?$IL?$AA@", "`string'");
+        expect("??_C@_01HPEKJNMB@?$IK?$AA@", "`string'");
+        expect("??_C@_01FEGHMOAC@?$IJ?$AA@", "`string'");
+        expect("??_C@_01ENHMPPED@?$II?$AA@", "`string'");
+        expect("??_C@_01MKOEODIM@?$IH?$AA@", "`string'");
+        expect("??_C@_01NDPPNCMN@?$IG?$AA@", "`string'");
+        expect("??_C@_01PINCIBAO@?$IF?$AA@", "`string'");
+        expect("??_C@_01OBMJLAEP@?$IE?$AA@", "`string'");
+        expect("??_C@_01KOIICGII@?$ID?$AA@", "`string'");
+        expect("??_C@_01LHJDBHMJ@?$IC?$AA@", "`string'");
+        expect("??_C@_01JMLOEEAK@?$IB?$AA@", "`string'");
+        expect("??_C@_01IFKFHFEL@?$IA?$AA@", "`string'");
+        expect("??_C@_01BGIBIIDJ@?$HP?$AA@", "`string'");
+        expect("??_C@_01PJKLJHI@?$HO?$AA@", "`string'");
+        expect("??_C@_01CELHOKLL@?$HN?$AA@", "`string'");
+        expect("??_C@_01DNKMNLPK@?$HM?$AA@", "`string'");
+        expect("??_C@_01HCONENDN@?$HL?$AA@", "`string'");
+        expect("??_C@_01GLPGHMHM@z?$AA@", "`string'");
+        expect("??_C@_01EANLCPLP@y?$AA@", "`string'");
+        expect("??_C@_01FJMABOPO@x?$AA@", "`string'");
+        expect("??_C@_01NOFIACDB@w?$AA@", "`string'");
+        expect("??_C@_01MHEDDDHA@v?$AA@", "`string'");
+        expect("??_C@_01OMGOGALD@u?$AA@", "`string'");
+        expect("??_C@_01PFHFFBPC@t?$AA@", "`string'");
+        expect("??_C@_01LKDEMHDF@s?$AA@", "`string'");
+        expect("??_C@_01KDCPPGHE@r?$AA@", "`string'");
+        expect("??_C@_01IIACKFLH@q?$AA@", "`string'");
+        expect("??_C@_01JBBJJEPG@p?$AA@", "`string'");
+        expect("??_C@_01FMEDJKGI@o?$AA@", "`string'");
+        expect("??_C@_01EFFIKLCJ@n?$AA@", "`string'");
+        expect("??_C@_01GOHFPIOK@m?$AA@", "`string'");
+        expect("??_C@_01HHGOMJKL@l?$AA@", "`string'");
+        expect("??_C@_01DICPFPGM@k?$AA@", "`string'");
+        expect("??_C@_01CBDEGOCN@j?$AA@", "`string'");
+        expect("??_C@_01KBJDNOO@i?$AA@", "`string'");
+        expect("??_C@_01BDACAMKP@h?$AA@", "`string'");
+        expect("??_C@_01JEJKBAGA@g?$AA@", "`string'");
+        expect("??_C@_01INIBCBCB@f?$AA@", "`string'");
+        expect("??_C@_01KGKMHCOC@e?$AA@", "`string'");
+        expect("??_C@_01LPLHEDKD@d?$AA@", "`string'");
+        expect("??_C@_01PAPGNFGE@c?$AA@", "`string'");
+        expect("??_C@_01OJONOECF@b?$AA@", "`string'");
+        expect("??_C@_01MCMALHOG@a?$AA@", "`string'");
+        expect("??_C@_01NLNLIGKH@?$GA?$AA@", "`string'");
+        expect("??_C@_01IDAFKMJL@_?$AA@", "`string'");
+        expect("??_C@_01JKBOJNNK@?$FO?$AA@", "`string'");
+        expect("??_C@_01LBDDMOBJ@?$FN?$AA@", "`string'");
+        expect("??_C@_01KICIPPFI@?2?$AA@", "`string'");
+        expect("??_C@_01OHGJGJJP@?$FL?$AA@", "`string'");
+        expect("??_C@_01POHCFINO@Z?$AA@", "`string'");
+        expect("??_C@_01NFFPALBN@Y?$AA@", "`string'");
+        expect("??_C@_01MMEEDKFM@X?$AA@", "`string'");
+        expect("??_C@_01ELNMCGJD@W?$AA@", "`string'");
+        expect("??_C@_01FCMHBHNC@V?$AA@", "`string'");
+        expect("??_C@_01HJOKEEBB@U?$AA@", "`string'");
+        expect("??_C@_01GAPBHFFA@T?$AA@", "`string'");
+        expect("??_C@_01CPLAODJH@S?$AA@", "`string'");
+        expect("??_C@_01DGKLNCNG@R?$AA@", "`string'");
+        expect("??_C@_01BNIGIBBF@Q?$AA@", "`string'");
+        expect("??_C@_01EJNLAFE@P?$AA@", "`string'");
+        expect("??_C@_01MJMHLOMK@O?$AA@", "`string'");
+        expect("??_C@_01NANMIPIL@N?$AA@", "`string'");
+        expect("??_C@_01PLPBNMEI@M?$AA@", "`string'");
+        expect("??_C@_01OCOKONAJ@L?$AA@", "`string'");
+        expect("??_C@_01KNKLHLMO@K?$AA@", "`string'");
+        expect("??_C@_01LELAEKIP@J?$AA@", "`string'");
+        expect("??_C@_01JPJNBJEM@I?$AA@", "`string'");
+        expect("??_C@_01IGIGCIAN@H?$AA@", "`string'");
+        expect("??_C@_01BBODEMC@G?$AA@", "`string'");
+        expect("??_C@_01BIAFAFID@F?$AA@", "`string'");
+        expect("??_C@_01DDCIFGEA@E?$AA@", "`string'");
+        expect("??_C@_01CKDDGHAB@D?$AA@", "`string'");
+        expect("??_C@_01GFHCPBMG@C?$AA@", "`string'");
+        expect("??_C@_01HMGJMAIH@B?$AA@", "`string'");
+        expect("??_C@_01FHEEJDEE@A?$AA@", "`string'");
+        expect("??_C@_01EOFPKCAF@?$EA?$AA@", "`string'");
+        expect("??_C@_01OGPIMHDM@?$DP?$AA@", "`string'");
+        expect("??_C@_01PPODPGHN@?$DO?$AA@", "`string'");
+        expect("??_C@_01NEMOKFLO@?$DN?$AA@", "`string'");
+        expect("??_C@_01MNNFJEPP@?$DM?$AA@", "`string'");
+        expect("??_C@_01ICJEACDI@?$DL?$AA@", "`string'");
+        expect("??_C@_01JLIPDDHJ@?3?$AA@", "`string'");
+        expect("??_C@_01LAKCGALK@9?$AA@", "`string'");
+        expect("??_C@_01KJLJFBPL@8?$AA@", "`string'");
+        expect("??_C@_01COCBENDE@7?$AA@", "`string'");
+        expect("??_C@_01DHDKHMHF@6?$AA@", "`string'");
+        expect("??_C@_01BMBHCPLG@5?$AA@", "`string'");
+        expect("??_C@_01FAMBOPH@4?$AA@", "`string'");
+        expect("??_C@_01EKENIIDA@3?$AA@", "`string'");
+        expect("??_C@_01FDFGLJHB@2?$AA@", "`string'");
+        expect("??_C@_01HIHLOKLC@1?$AA@", "`string'");
+        expect("??_C@_01GBGANLPD@0?$AA@", "`string'");
+        expect("??_C@_01KMDKNFGN@?1?$AA@", "`string'");
+        expect("??_C@_01LFCBOECM@?4?$AA@", "`string'");
+        expect("??_C@_01JOAMLHOP@?9?$AA@", "`string'");
+        expect("??_C@_01IHBHIGKO@?0?$AA@", "`string'");
+        expect("??_C@_01MIFGBAGJ@?$CL?$AA@", "`string'");
+        expect("??_C@_01NBENCBCI@?$CK?$AA@", "`string'");
+        expect("??_C@_01PKGAHCOL@?$CJ?$AA@", "`string'");
+        expect("??_C@_01ODHLEDKK@?$CI?$AA@", "`string'");
+        expect("??_C@_01GEODFPGF@?8?$AA@", "`string'");
+        expect("??_C@_01HNPIGOCE@?$CG?$AA@", "`string'");
+        expect("??_C@_01FGNFDNOH@?$CF?$AA@", "`string'");
+        expect("??_C@_01EPMOAMKG@$?$AA@", "`string'");
+        expect("??_C@_01IPJKGB@?$CD?$AA@", "`string'");
+        expect("??_C@_01BJJEKLCA@?$CC?$AA@", "`string'");
+        expect("??_C@_01DCLJPIOD@?$CB?$AA@", "`string'");
+        expect("??_C@_01CLKCMJKC@?5?$AA@", "`string'");
+        expect("??_C@_01HDHMODJO@?$BP?$AA@", "`string'");
+        expect("??_C@_01GKGHNCNP@?$BO?$AA@", "`string'");
+        expect("??_C@_01EBEKIBBM@?$BN?$AA@", "`string'");
+        expect("??_C@_01FIFBLAFN@?$BM?$AA@", "`string'");
+        expect("??_C@_01BHBACGJK@?$BL?$AA@", "`string'");
+        expect("??_C@_01OALBHNL@?$BK?$AA@", "`string'");
+        expect("??_C@_01CFCGEEBI@?$BJ?$AA@", "`string'");
+        expect("??_C@_01DMDNHFFJ@?$BI?$AA@", "`string'");
+        expect("??_C@_01LLKFGJJG@?$BH?$AA@", "`string'");
+        expect("??_C@_01KCLOFINH@?$BG?$AA@", "`string'");
+        expect("??_C@_01IJJDALBE@?$BF?$AA@", "`string'");
+        expect("??_C@_01JAIIDKFF@?$BE?$AA@", "`string'");
+        expect("??_C@_01NPMJKMJC@?$BD?$AA@", "`string'");
+        expect("??_C@_01MGNCJNND@?$BC?$AA@", "`string'");
+        expect("??_C@_01ONPPMOBA@?$BB?$AA@", "`string'");
+        expect("??_C@_01PEOEPPFB@?$BA?$AA@", "`string'");
+        expect("??_C@_01DJLOPBMP@?$AP?$AA@", "`string'");
+        expect("??_C@_01CAKFMAIO@?$AO?$AA@", "`string'");
+        expect("??_C@_01LIIJDEN@?$AN?$AA@", "`string'");
+        expect("??_C@_01BCJDKCAM@?$AM?$AA@", "`string'");
+        expect("??_C@_01FNNCDEML@?$AL?$AA@", "`string'");
+        expect("??_C@_01EEMJAFIK@?6?$AA@", "`string'");
+        expect("??_C@_01GPOEFGEJ@?7?$AA@", "`string'");
+        expect("??_C@_01HGPPGHAI@?$AI?$AA@", "`string'");
+        expect("??_C@_01PBGHHLMH@?$AH?$AA@", "`string'");
+        expect("??_C@_01OIHMEKIG@?$AG?$AA@", "`string'");
+        expect("??_C@_01MDFBBJEF@?$AF?$AA@", "`string'");
+        expect("??_C@_01NKEKCIAE@?$AE?$AA@", "`string'");
+        expect("??_C@_01JFALLOMD@?$AD?$AA@", "`string'");
+        expect("??_C@_01IMBAIPIC@?$AC?$AA@", "`string'");
+        expect("??_C@_01KHDNNMEB@?$AB?$AA@", "`string'");
+        expect("??_C@_01LOCGONAA@?$AA?$AA@", "`string'");
+
+        // Wide characters.
+        expect("??_C@_13KDLDGPGJ@?$AA?7?$AA?$AA@", "`string'");
+        expect("??_C@_13LBAGMAIH@?$AA?6?$AA?$AA@", "`string'");
+        expect("??_C@_13JLKKHOC@?$AA?$AL?$AA?$AA@", "`string'");
+        expect("??_C@_13HOIJIPNN@?$AA?5?$AA?$AA@", "`string'");
+        expect("??_C@_13MGDFOILI@?$AA?$CB?$AA?$AA@", "`string'");
+        expect("??_C@_13NEIAEHFG@?$AA?$CC?$AA?$AA@", "`string'");
+        expect("??_C@_13GMDMCADD@?$AA?$CD?$AA?$AA@", "`string'");
+        expect("??_C@_13PBOLBIIK@?$AA$?$AA?$AA@", "`string'");
+        expect("??_C@_13EJFHHPOP@?$AA?$CF?$AA?$AA@", "`string'");
+        expect("??_C@_13FLOCNAAB@?$AA?$CG?$AA?$AA@", "`string'");
+        expect("??_C@_13ODFOLHGE@?$AA?8?$AA?$AA@", "`string'");
+        expect("??_C@_13LLDNKHDC@?$AA?$CI?$AA?$AA@", "`string'");
+        expect("??_C@_13DIBMAFH@?$AA?$CJ?$AA?$AA@", "`string'");
+        expect("??_C@_13BBDEGPLJ@?$AA?$CK?$AA?$AA@", "`string'");
+        expect("??_C@_13KJIIAINM@?$AA?$CL?$AA?$AA@", "`string'");
+        expect("??_C@_13DEFPDAGF@?$AA?0?$AA?$AA@", "`string'");
+        expect("??_C@_13IMODFHAA@?$AA?9?$AA?$AA@", "`string'");
+        expect("??_C@_13JOFGPIOO@?$AA?4?$AA?$AA@", "`string'");
+        expect("??_C@_13CGOKJPIL@?$AA?1?$AA?$AA@", "`string'");
+        expect("??_C@_13COJANIEC@?$AA0?$AA?$AA@", "`string'");
+        expect("??_C@_13JGCMLPCH@?$AA1?$AA?$AA@", "`string'");
+        expect("??_C@_13IEJJBAMJ@?$AA2?$AA?$AA@", "`string'");
+        expect("??_C@_13DMCFHHKM@?$AA3?$AA?$AA@", "`string'");
+        expect("??_C@_13KBPCEPBF@?$AA4?$AA?$AA@", "`string'");
+        expect("??_C@_13BJEOCIHA@?$AA5?$AA?$AA@", "`string'");
+        expect("??_C@_13LPLIHJO@?$AA6?$AA?$AA@", "`string'");
+        expect("??_C@_13LDEHOAPL@?$AA7?$AA?$AA@", "`string'");
+        expect("??_C@_13OLCEPAKN@?$AA8?$AA?$AA@", "`string'");
+        expect("??_C@_13FDJIJHMI@?$AA9?$AA?$AA@", "`string'");
+        expect("??_C@_13EBCNDICG@?$AA?3?$AA?$AA@", "`string'");
+        expect("??_C@_13PJJBFPED@?$AA?$DL?$AA?$AA@", "`string'");
+        expect("??_C@_13GEEGGHPK@?$AA?$DM?$AA?$AA@", "`string'");
+        expect("??_C@_13NMPKAAJP@?$AA?$DN?$AA?$AA@", "`string'");
+        expect("??_C@_13MOEPKPHB@?$AA?$DO?$AA?$AA@", "`string'");
+        expect("??_C@_13HGPDMIBE@?$AA?$DP?$AA?$AA@", "`string'");
+        expect("??_C@_13EFKPHINO@?$AA?$EA?$AA?$AA@", "`string'");
+        expect("??_C@_13PNBDBPLL@?$AAA?$AA?$AA@", "`string'");
+        expect("??_C@_13OPKGLAFF@?$AAB?$AA?$AA@", "`string'");
+        expect("??_C@_13FHBKNHDA@?$AAC?$AA?$AA@", "`string'");
+        expect("??_C@_13MKMNOPIJ@?$AAD?$AA?$AA@", "`string'");
+        expect("??_C@_13HCHBIIOM@?$AAE?$AA?$AA@", "`string'");
+        expect("??_C@_13GAMECHAC@?$AAF?$AA?$AA@", "`string'");
+        expect("??_C@_13NIHIEAGH@?$AAG?$AA?$AA@", "`string'");
+        expect("??_C@_13IABLFADB@?$AAH?$AA?$AA@", "`string'");
+        expect("??_C@_13DIKHDHFE@?$AAI?$AA?$AA@", "`string'");
+        expect("??_C@_13CKBCJILK@?$AAJ?$AA?$AA@", "`string'");
+        expect("??_C@_13JCKOPPNP@?$AAK?$AA?$AA@", "`string'");
+        expect("??_C@_13PHJMHGG@?$AAL?$AA?$AA@", "`string'");
+        expect("??_C@_13LHMFKAAD@?$AAM?$AA?$AA@", "`string'");
+        expect("??_C@_13KFHAAPON@?$AAN?$AA?$AA@", "`string'");
+        expect("??_C@_13BNMMGIII@?$AAO?$AA?$AA@", "`string'");
+        expect("??_C@_13BFLGCPEB@?$AAP?$AA?$AA@", "`string'");
+        expect("??_C@_13KNAKEICE@?$AAQ?$AA?$AA@", "`string'");
+        expect("??_C@_13LPLPOHMK@?$AAR?$AA?$AA@", "`string'");
+        expect("??_C@_13HADIAKP@?$AAS?$AA?$AA@", "`string'");
+        expect("??_C@_13JKNELIBG@?$AAT?$AA?$AA@", "`string'");
+        expect("??_C@_13CCGINPHD@?$AAU?$AA?$AA@", "`string'");
+        expect("??_C@_13DANNHAJN@?$AAV?$AA?$AA@", "`string'");
+        expect("??_C@_13IIGBBHPI@?$AAW?$AA?$AA@", "`string'");
+        expect("??_C@_13NAACAHKO@?$AAX?$AA?$AA@", "`string'");
+        expect("??_C@_13GILOGAML@?$AAY?$AA?$AA@", "`string'");
+        expect("??_C@_13HKALMPCF@?$AAZ?$AA?$AA@", "`string'");
+        expect("??_C@_13MCLHKIEA@?$AA?$FL?$AA?$AA@", "`string'");
+        expect("??_C@_13FPGAJAPJ@?$AA?2?$AA?$AA@", "`string'");
+        expect("??_C@_13OHNMPHJM@?$AA?$FN?$AA?$AA@", "`string'");
+        expect("??_C@_13PFGJFIHC@?$AA?$FO?$AA?$AA@", "`string'");
+        expect("??_C@_13ENNFDPBH@?$AA_?$AA?$AA@", "`string'");
+        expect("??_C@_13OFJNNHOA@?$AA?$GA?$AA?$AA@", "`string'");
+        expect("??_C@_13FNCBLAIF@?$AAa?$AA?$AA@", "`string'");
+        expect("??_C@_13EPJEBPGL@?$AAb?$AA?$AA@", "`string'");
+        expect("??_C@_13PHCIHIAO@?$AAc?$AA?$AA@", "`string'");
+        expect("??_C@_13GKPPEALH@?$AAd?$AA?$AA@", "`string'");
+        expect("??_C@_13NCEDCHNC@?$AAe?$AA?$AA@", "`string'");
+        expect("??_C@_13MAPGIIDM@?$AAf?$AA?$AA@", "`string'");
+        expect("??_C@_13HIEKOPFJ@?$AAg?$AA?$AA@", "`string'");
+        expect("??_C@_13CACJPPAP@?$AAh?$AA?$AA@", "`string'");
+        expect("??_C@_13JIJFJIGK@?$AAi?$AA?$AA@", "`string'");
+        expect("??_C@_13IKCADHIE@?$AAj?$AA?$AA@", "`string'");
+        expect("??_C@_13DCJMFAOB@?$AAk?$AA?$AA@", "`string'");
+        expect("??_C@_13KPELGIFI@?$AAl?$AA?$AA@", "`string'");
+        expect("??_C@_13BHPHAPDN@?$AAm?$AA?$AA@", "`string'");
+        expect("??_C@_13FECKAND@?$AAn?$AA?$AA@", "`string'");
+        expect("??_C@_13LNPOMHLG@?$AAo?$AA?$AA@", "`string'");
+        expect("??_C@_13LFIEIAHP@?$AAp?$AA?$AA@", "`string'");
+        expect("??_C@_13NDIOHBK@?$AAq?$AA?$AA@", "`string'");
+        expect("??_C@_13BPINEIPE@?$AAr?$AA?$AA@", "`string'");
+        expect("??_C@_13KHDBCPJB@?$AAs?$AA?$AA@", "`string'");
+        expect("??_C@_13DKOGBHCI@?$AAt?$AA?$AA@", "`string'");
+        expect("??_C@_13ICFKHAEN@?$AAu?$AA?$AA@", "`string'");
+        expect("??_C@_13JAOPNPKD@?$AAv?$AA?$AA@", "`string'");
+        expect("??_C@_13CIFDLIMG@?$AAw?$AA?$AA@", "`string'");
+        expect("??_C@_13HADAKIJA@?$AAx?$AA?$AA@", "`string'");
+        expect("??_C@_13MIIMMPPF@?$AAy?$AA?$AA@", "`string'");
+        expect("??_C@_13NKDJGABL@?$AAz?$AA?$AA@", "`string'");
+        expect("??_C@_13GCIFAHHO@?$AA?$HL?$AA?$AA@", "`string'");
+        expect("??_C@_13PPFCDPMH@?$AA?$HM?$AA?$AA@", "`string'");
+        expect("??_C@_13EHOOFIKC@?$AA?$HN?$AA?$AA@", "`string'");
+        expect("??_C@_13FFFLPHEM@?$AA?$HO?$AA?$AA@", "`string'");
+
+        // Tests for maximum string length
+        expect("??_C@_0CF@LABBIIMO@012345678901234567890123456789AB@", "`string'");
+        expect("??_C@_1EK@KFPEBLPK@?$AA0?$AA1?$AA2?$AA3?$AA4?$AA5?$AA6?$AA7?$AA8?$AA9?$AA0?$AA1?$AA2?$AA3?$AA4?$AA5?$AA6?$AA7?$AA8?$AA9?$AA0?$AA1?$AA2?$AA3?$AA4?$AA5?$AA6?$AA7?$AA8?$AA9?$AAA?$AAB@", "`string'");
+        // Unicode character.
+        expect("??_C@_13IIHIAFKH@?W?$PP?$AA?$AA@", "`string'");
+        // u8/u/U literal strings.
+        expect("??_C@_02PCEFGMJL@hi?$AA@", "`string'");
+        expect("??_C@_05OMLEGLOC@h?$AAi?$AA?$AA?$AA@", "`string'");
+        expect("??_C@_0M@GFNAJIPG@h?$AA?$AA?$AAi?$AA?$AA?$AA?$AA?$AA?$AA?$AA@", "`string'");
     }
 
     #[test]
