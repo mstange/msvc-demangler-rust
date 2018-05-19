@@ -326,6 +326,10 @@ impl<'a> ParserState<'a> {
                     let scope = self.read_scope()?;
                     Type::CXXVBTable(scope, access_class)
                 }
+                b'9' => {
+                    // extern "C" names have their class and type omitted.
+                    Type::None
+                }
                 b'Y' => {
                     // Read a non-member function.
                     let calling_conv = self.read_calling_conv()?;
@@ -2032,6 +2036,10 @@ mod tests {
         expect(
             "??$emplace_hint@AEBUpiecewise_construct_t@std@@V?$tuple@AEBH@2@V?$tuple@$$V@2@@?$_Tree@V?$_Tmap_traits@HUPayload@RtpUtility@webrtc@@U?$less@H@std@@V?$allocator@U?$pair@$$CBHUPayload@RtpUtility@webrtc@@@std@@@5@$0A@@std@@@std@@QEAA?AV?$_Tree_iterator@V?$_Tree_val@U?$_Tree_simple_types@U?$pair@$$CBHUPayload@RtpUtility@webrtc@@@std@@@std@@@std@@@1@V?$_Tree_const_iterator@V?$_Tree_val@U?$_Tree_simple_types@U?$pair@$$CBHUPayload@RtpUtility@webrtc@@@std@@@std@@@std@@@1@AEBUpiecewise_construct_t@1@$$QEAV?$tuple@AEBH@1@$$QEAV?$tuple@$$V@1@@Z",
             "public: class std::_Tree_iterator<class std::_Tree_val<struct std::_Tree_simple_types<struct std::pair<int const,struct webrtc::RtpUtility::Payload> > > > __cdecl std::_Tree<class std::_Tmap_traits<int,struct webrtc::RtpUtility::Payload,struct std::less<int>,class std::allocator<struct std::pair<int const,struct webrtc::RtpUtility::Payload> >,0> >::emplace_hint<struct std::piecewise_construct_t const &,class std::tuple<int const &>,class std::tuple<> >(class std::_Tree_const_iterator<class std::_Tree_val<struct std::_Tree_simple_types<struct std::pair<int const,struct webrtc::RtpUtility::Payload> > > >,struct std::piecewise_construct_t const &,class std::tuple<int const &> &&,class std::tuple<> &&)",
+        );
+        expect(
+            "?_OptionsStorage@?1??__local_stdio_scanf_options@@9@9",
+            "`__local_stdio_scanf_options'::`2'::_OptionsStorage",
         );
     }
 
