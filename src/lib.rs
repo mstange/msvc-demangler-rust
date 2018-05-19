@@ -109,12 +109,88 @@ bitflags! {
 // Represents an identifier which may be a template.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Name<'a> {
-    Operator(&'static str),
+    Operator(Operator),
     NonTemplate(&'a [u8]),
     Template(Box<Name<'a>>, Params<'a>),
     Discriminator(i32),
     ParsedName(Box<ParseResult<'a>>),
     AnonymousNamespace,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Operator {
+    Ctor,
+    Dtor,
+    New,
+    Delete,
+    Equal,
+    RShift,
+    LShift,
+    Bang,
+    EqualEqual,
+    BangEqual,
+    Subscript,
+    Conversion, // TODO
+    Arrow,
+    Star,
+    PlusPlus,
+    MinusMinus,
+    Minus,
+    Plus,
+    Amp,
+    ArrowStar,
+    Slash,
+    Percent,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    Comma,
+    Call,
+    Tilde,
+    Caret,
+    Pipe,
+    AmpAmp,
+    PipePipe,
+    StarEqual,
+    PlusEqual,
+    MinusEqual,
+    SlashEqual,
+    PercentEqual,
+    GreaterGreaterEqual,
+    LessLessEqual,
+    AmpEqual,
+    PipeEqual,
+    CaretEqual,
+
+    VFTable,
+    VBTable,
+    VCall,
+    Typeof,
+    LocalStaticGuard,
+    String,
+    VBaseDtor,
+    VectorDeletingDtor,
+    DefaultCtorClosure,
+    ScalarDeletingDtor,
+    VectorCtorIterator,
+    VectorDtorIterator,
+    VectorVBaseCtorIterator,
+    VirtualDisplacementMap,
+    EHVectorCtorIterator,
+    EHVectorDtorIterator,
+    EHVectorVBaseCtorIterator,
+    CopyCtorClosure,
+
+    LocalVFTable,
+    LocalVFTableCtorClosure,
+    ArrayNew,
+    ArrayDelete,
+    PlacementDeleteClosure,
+    PlacementArrayDeleteClosure,
+
+    CoroutineAwait,
+    LiteralOperatorName,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -630,82 +706,82 @@ impl<'a> ParserState<'a> {
         Ok(Name::Operator(self.read_operator_name()?))
     }
 
-    fn read_operator_name(&mut self) -> Result<&'static str> {
+    fn read_operator_name(&mut self) -> Result<Operator> {
         let orig = self.input;
 
         Ok(match self.get()? {
-            b'0' => "ctor",
-            b'1' => "dtor",
-            b'2' => "operator new",
-            b'3' => "operator delete",
-            b'4' => "operator=",
-            b'5' => "operator>>",
-            b'6' => "operator<<",
-            b'7' => "operator!",
-            b'8' => "operator==",
-            b'9' => "operator!=",
-            b'A' => "operator[]",
-            b'B' => "operatorcast", // TODO
-            b'C' => "operator->",
-            b'D' => "operator*",
-            b'E' => "operator++",
-            b'F' => "operator--",
-            b'G' => "operator-",
-            b'H' => "operator+",
-            b'I' => "operator&",
-            b'J' => "operator->*",
-            b'K' => "operator/",
-            b'L' => "operator%",
-            b'M' => "operator<",
-            b'N' => "operator<=",
-            b'O' => "operator>",
-            b'P' => "operator>=",
-            b'Q' => "operator,",
-            b'R' => "operator()",
-            b'S' => "operator~",
-            b'T' => "operator^",
-            b'U' => "operator|",
-            b'V' => "operator&&",
-            b'W' => "operator||",
-            b'X' => "operator*=",
-            b'Y' => "operator+=",
-            b'Z' => "operator-=",
+            b'0' => Operator::Ctor,
+            b'1' => Operator::Dtor,
+            b'2' => Operator::New,
+            b'3' => Operator::Delete,
+            b'4' => Operator::Equal,
+            b'5' => Operator::RShift,
+            b'6' => Operator::LShift,
+            b'7' => Operator::Bang,
+            b'8' => Operator::EqualEqual,
+            b'9' => Operator::BangEqual,
+            b'A' => Operator::Subscript,
+            b'B' => Operator::Conversion, // TODO
+            b'C' => Operator::Arrow,
+            b'D' => Operator::Star,
+            b'E' => Operator::PlusPlus,
+            b'F' => Operator::MinusMinus,
+            b'G' => Operator::Minus,
+            b'H' => Operator::Plus,
+            b'I' => Operator::Amp,
+            b'J' => Operator::ArrowStar,
+            b'K' => Operator::Slash,
+            b'L' => Operator::Percent,
+            b'M' => Operator::Less,
+            b'N' => Operator::LessEqual,
+            b'O' => Operator::Greater,
+            b'P' => Operator::GreaterEqual,
+            b'Q' => Operator::Comma,
+            b'R' => Operator::Call,
+            b'S' => Operator::Tilde,
+            b'T' => Operator::Caret,
+            b'U' => Operator::Pipe,
+            b'V' => Operator::AmpAmp,
+            b'W' => Operator::PipePipe,
+            b'X' => Operator::StarEqual,
+            b'Y' => Operator::PlusEqual,
+            b'Z' => Operator::MinusEqual,
             b'_' => match self.get()? {
-                b'0' => "operator/=",
-                b'1' => "operator%=",
-                b'2' => "operator>>=",
-                b'3' => "operator<<=",
-                b'4' => "operator&=",
-                b'5' => "operator|=",
-                b'6' => "operator^=",
-                b'7' => "`vftable'",
-                b'8' => "`vbtable'",
-                b'9' => "`vcall'",
-                b'A' => "`typeof'",
-                b'B' => "`local static guard'",
-                b'C' => "`string'",
-                b'D' => "`vbase destructor'",
-                b'E' => "`vector deleting destructor'",
-                b'F' => "`default constructor closure'",
-                b'G' => "`scalar deleting destructor'",
-                b'H' => "`vector constructor iterator'",
-                b'I' => "`vector destructor iterator'",
-                b'J' => "`vector vbase constructor iterator'",
-                b'K' => "`virtual displacement map'",
-                b'L' => "`eh vector constructor iterator'",
-                b'M' => "`eh vector destructor iterator'",
-                b'N' => "`eh vector vbase constructor iterator'",
-                b'O' => "`copy constructor closure'",
-                b'S' => "`local vftable'",
-                b'T' => "`local vftable constructor closure'",
-                b'U' => "operator new[]",
-                b'V' => "operator delete[]",
-                b'X' => "`placement delete closure'",
-                b'Y' => "`placement delete[] closure'",
+                b'0' => Operator::SlashEqual,
+                b'1' => Operator::PercentEqual,
+                b'2' => Operator::GreaterGreaterEqual,
+                b'3' => Operator::LessLessEqual,
+                b'4' => Operator::AmpEqual,
+                b'5' => Operator::PipeEqual,
+                b'6' => Operator::CaretEqual,
+                b'7' => Operator::VFTable,
+                b'8' => Operator::VBTable,
+                b'9' => Operator::VCall,
+                b'A' => Operator::Typeof,
+                b'B' => Operator::LocalStaticGuard,
+                b'C' => Operator::String,
+                b'D' => Operator::VBaseDtor,
+                b'E' => Operator::VectorDeletingDtor,
+                b'F' => Operator::DefaultCtorClosure,
+                b'G' => Operator::ScalarDeletingDtor,
+                b'H' => Operator::VectorCtorIterator,
+                b'I' => Operator::VectorDtorIterator,
+                b'J' => Operator::VectorVBaseCtorIterator,
+                b'K' => Operator::VirtualDisplacementMap,
+                b'L' => Operator::EHVectorCtorIterator,
+                b'M' => Operator::EHVectorDtorIterator,
+                b'N' => Operator::EHVectorVBaseCtorIterator,
+                b'O' => Operator::CopyCtorClosure,
+                b'S' => Operator::LocalVFTable,
+                b'T' => Operator::LocalVFTableCtorClosure,
+                b'U' => Operator::ArrayNew,
+                b'V' => Operator::ArrayDelete,
+                b'X' => Operator::PlacementDeleteClosure,
+                b'Y' => Operator::PlacementArrayDeleteClosure,
                 b'_' => if self.consume(b"L") {
-                    " co_await"
+                    Operator::CoroutineAwait
                 } else if self.consume(b"K") {
-                    " CXXLiteralOperatorName" // TODO: read <source-name>, that's the operator name
+                    Operator::LiteralOperatorName // TODO: read <source-name>, that's the operator name
                 } else {
                     return Err(Error::new(format!(
                         "unknown operator name: {}",
@@ -1561,18 +1637,92 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
+    fn write_operator_name(&mut self, op: &Operator) -> SerializeResult<()> {
+        let s = match op {
+            &Operator::Ctor => "ctor",
+            &Operator::Dtor => "dtor",
+            &Operator::New => "operator new",
+            &Operator::Delete => "operator delete",
+            &Operator::Equal => "operator=",
+            &Operator::RShift => "operator>>",
+            &Operator::LShift => "operator<<",
+            &Operator::Bang => "operator!",
+            &Operator::EqualEqual => "operator==",
+            &Operator::BangEqual => "operator!=",
+            &Operator::Subscript => "operator[]",
+            &Operator::Conversion => "operatorcast",
+            &Operator::Arrow => "operator->",
+            &Operator::Star => "operator*",
+            &Operator::PlusPlus => "operator++",
+            &Operator::MinusMinus => "operator--",
+            &Operator::Minus => "operator-",
+            &Operator::Plus => "operator+",
+            &Operator::Amp => "operator&",
+            &Operator::ArrowStar => "operator->*",
+            &Operator::Slash => "operator/",
+            &Operator::Percent => "operator%",
+            &Operator::Less => "operator<",
+            &Operator::LessEqual => "operator<=",
+            &Operator::Greater => "operator>",
+            &Operator::GreaterEqual => "operator>=",
+            &Operator::Comma => "operator,",
+            &Operator::Call => "operator()",
+            &Operator::Tilde => "operator~",
+            &Operator::Caret => "operator^",
+            &Operator::Pipe => "operator|",
+            &Operator::AmpAmp => "operator&&",
+            &Operator::PipePipe => "operator||",
+            &Operator::StarEqual => "operator*=",
+            &Operator::PlusEqual => "operator+=",
+            &Operator::MinusEqual => "operator-=",
+            &Operator::SlashEqual => "operator/=",
+            &Operator::PercentEqual => "operator%=",
+            &Operator::GreaterGreaterEqual => "operator>>=",
+            &Operator::LessLessEqual => "operator<<=",
+            &Operator::AmpEqual => "operator&=",
+            &Operator::PipeEqual => "operator|=",
+            &Operator::CaretEqual => "operator^=",
+
+            &Operator::VFTable => "`vftable'",
+            &Operator::VBTable => "`vbtable'",
+            &Operator::VCall => "`vcall'",
+            &Operator::Typeof => "`typeof'",
+            &Operator::LocalStaticGuard => "`local static guard'",
+            &Operator::String => "`string'",
+            &Operator::VBaseDtor => "`vbase destructor'",
+            &Operator::VectorDeletingDtor => "`vector deleting destructor'",
+            &Operator::DefaultCtorClosure => "`default constructor closure'",
+            &Operator::ScalarDeletingDtor => "`scalar deleting destructor'",
+            &Operator::VectorCtorIterator => "`vector constructor iterator'",
+            &Operator::VectorDtorIterator => "`vector destructor iterator'",
+            &Operator::VectorVBaseCtorIterator => "`vector vbase constructor iterator'",
+            &Operator::VirtualDisplacementMap => "`virual displacement map'",
+            &Operator::EHVectorCtorIterator => "`eh vector constructor iterator'",
+            &Operator::EHVectorDtorIterator => "`eh vector destructor iterator'",
+            &Operator::EHVectorVBaseCtorIterator => "`eh vector vbase constructor iterator'",
+            &Operator::CopyCtorClosure => "`copy constructor closure",
+
+            &Operator::LocalVFTable => "`local vftable'",
+            &Operator::LocalVFTableCtorClosure => "`local vftable constructor closure'",
+            &Operator::ArrayNew => "operator new[]",
+            &Operator::ArrayDelete => "operator delete[]",
+            &Operator::PlacementDeleteClosure => "`placement delete closure'",
+            &Operator::PlacementArrayDeleteClosure => "`placement delete[] closure'",
+
+            &Operator::CoroutineAwait => " co_await",
+            &Operator::LiteralOperatorName => " CXXLiteralOperatorName",
+        };
+        write!(self.w, "{}", s)?;
+        Ok(())
+    }
+
     fn write_one_name(&mut self, name: &Name) -> SerializeResult<()> {
         match name {
-            &Name::Operator(op) => {
-                match op {
-                    _ => {
-                        if self.flags == DemangleFlags::LotsOfWhitespace {
-                            self.write_space()?;
-                        }
-                        // Print out an overloaded operator.
-                        write!(self.w, "{}", op)?;
-                    }
+            &Name::Operator(ref op) => {
+                if self.flags == DemangleFlags::LotsOfWhitespace {
+                    self.write_space()?;
                 }
+                self.write_operator_name(op)?;
                 //panic!("only the last name should be an operator");
             }
             &Name::NonTemplate(ref name) => {
@@ -1621,22 +1771,22 @@ impl<'a> Serializer<'a> {
         }
 
         match &names.name {
-            &Name::Operator(op) => {
+            &Name::Operator(ref op) => {
                 match op {
-                    "ctor" => {
+                    &Operator::Ctor => {
                         let prev = names.scope.names.iter().nth(0).expect(
                             "If there's a ctor, there should be another name in this sequence",
                         );
                         self.write_one_name(prev)?;
                     }
-                    "dtor" => {
+                    &Operator::Dtor => {
                         let prev = names.scope.names.iter().nth(0).expect(
                             "If there's a dtor, there should be another name in this sequence",
                         );
                         write!(self.w, "~")?;
                         self.write_one_name(prev)?;
                     }
-                    "`vbtable'" => {
+                    &Operator::VBTable => {
                         write!(self.w, "{}", "`vbtable'{for `")?;
                         // The rest will be written by write_post of the
                         // symbol type.
@@ -1646,7 +1796,7 @@ impl<'a> Serializer<'a> {
                             self.write_space()?;
                         }
                         // Print out an overloaded operator.
-                        write!(self.w, "{}", op)?;
+                        self.write_operator_name(op)?;
                     }
                 }
             }
