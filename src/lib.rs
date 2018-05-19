@@ -219,6 +219,7 @@ pub enum Type<'a> {
     NonMemberFunction(CallingConv, Params<'a>, StorageClass, Box<Type<'a>>),
     CXXVBTable(NameSequence<'a>, StorageClass),
     CXXVFTable(NameSequence<'a>, StorageClass),
+    VCallThunk(i32, CallingConv),
     TemplateParameterWithIndex(i32),
     ThreadSafeStaticGuard(i32),
     Constant(i32),
@@ -348,6 +349,13 @@ impl<'a> ParserState<'a> {
                         },
                     };
                     self.read_encoded_string(char_bytes)?
+                }
+                b'$' => {
+                    self.expect(b"B")?;
+                    let vftable_offset = self.read_number()?;
+                    self.expect(b"A")?;
+                    let calling_conv = self.read_calling_conv()?;
+                    Type::VCallThunk(vftable_offset, calling_conv)
                 }
                 c => {
                     // Read a member function.
@@ -1313,6 +1321,11 @@ impl<'a> Serializer<'a> {
                 self.write_calling_conv(calling_conv)?;
                 return Ok(());
             }
+            &Type::VCallThunk(_, calling_conv) => {
+                write!(self.w, "[thunk]: ")?;
+                self.write_calling_conv(calling_conv)?;
+                return Ok(());
+            }
             &Type::CXXVBTable(_, sc) => sc,
             &Type::CXXVFTable(_, sc) => sc,
             &Type::TemplateParameterWithIndex(n) => {
@@ -1580,6 +1593,9 @@ impl<'a> Serializer<'a> {
                 }
                 self.w.write(b"}")?;
             },
+            &Type::VCallThunk(offset, _) => {
+                write!(self.w, "{{{},{{flat}}}}' }}", offset)?;
+            }
             _ => {}
         }
         Ok(())
@@ -2040,6 +2056,10 @@ mod tests {
         expect(
             "?_OptionsStorage@?1??__local_stdio_scanf_options@@9@9",
             "`__local_stdio_scanf_options'::`2'::_OptionsStorage",
+        );
+        expect(
+            "??_9nsDocument@@$BDMI@AE",
+            "[thunk]: __thiscall nsDocument::`vcall'{968,{flat}}' }",
         );
     }
 
