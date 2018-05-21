@@ -109,7 +109,7 @@ bitflags! {
 // Represents an identifier which may be a template.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Name<'a> {
-    Operator(Operator),
+    Operator(Operator<'a>),
     NonTemplate(&'a [u8]),
     Template(Box<Name<'a>>, Params<'a>),
     Discriminator(i32),
@@ -118,7 +118,7 @@ pub enum Name<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Operator {
+pub enum Operator<'a> {
     Ctor,
     Dtor,
     New,
@@ -191,6 +191,8 @@ pub enum Operator {
 
     CoroutineAwait,
     LiteralOperatorName,
+
+    RTTITypeDescriptor(StorageClass, Box<Type<'a>>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -256,6 +258,7 @@ pub enum Type<'a> {
     VarArgs,
     EmptyParameterPack,
     Nullptr,
+    RTTIType,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -356,6 +359,9 @@ impl<'a> ParserState<'a> {
                     self.expect(b"A")?;
                     let calling_conv = self.read_calling_conv()?;
                     Type::VCallThunk(vftable_offset, calling_conv)
+                }
+                b'8' => {
+                    Type::RTTIType
                 }
                 c => {
                     // Read a member function.
@@ -701,8 +707,9 @@ impl<'a> ParserState<'a> {
     fn read_name(&mut self, function: bool) -> Result<Symbol<'a>> {
         // println!("read_name on {}", str::from_utf8(self.input)?);
         let name = self.read_unqualified_name(function)?;
+        let scope = self.read_scope()?;
 
-        Ok(Symbol{name, scope: self.read_scope()? })
+        Ok(Symbol{name, scope})
     }
 
     fn read_func_type(&mut self) -> Result<Type<'a>> {
@@ -718,7 +725,7 @@ impl<'a> ParserState<'a> {
         Ok(Name::Operator(self.read_operator_name()?))
     }
 
-    fn read_operator_name(&mut self) -> Result<Operator> {
+    fn read_operator_name(&mut self) -> Result<Operator<'a>> {
         let orig = self.input;
 
         Ok(match self.get()? {
@@ -784,6 +791,18 @@ impl<'a> ParserState<'a> {
                 b'M' => Operator::EHVectorDtorIterator,
                 b'N' => Operator::EHVectorVBaseCtorIterator,
                 b'O' => Operator::CopyCtorClosure,
+                b'R' => {
+                    let c = self.get()?;
+                    match c {
+                        b'0' => {
+                            self.expect(b"?")?;
+                            let storage_class = self.read_storage_class();
+                            let t = self.read_var_type(storage_class)?;
+                            Operator::RTTITypeDescriptor(storage_class, Box::new(t))
+                        }
+                        _ => panic!("unknown RTTI Operator Name"),
+                    }
+                }
                 b'S' => Operator::LocalVFTable,
                 b'T' => Operator::LocalVFTableCtorClosure,
                 b'U' => Operator::ArrayNew,
@@ -1500,7 +1519,10 @@ impl<'a> Serializer<'a> {
             }
             &Type::EmptyParameterPack => {
                 return Ok(())
-            },
+            }
+            &Type::RTTIType => {
+                return Ok(())
+            }
         };
 
         if storage_class.contains(StorageClass::CONST) {
@@ -1731,6 +1753,12 @@ impl<'a> Serializer<'a> {
 
             &Operator::CoroutineAwait => " co_await",
             &Operator::LiteralOperatorName => " CXXLiteralOperatorName",
+
+            &Operator::RTTITypeDescriptor(_, ref inner) => {
+                self.write_pre(inner)?;
+                write!(self.w, "::`RTTI Type Descriptor'")?;
+                return Ok(());
+            },
         };
         write!(self.w, "{}", s)?;
         Ok(())
@@ -2060,6 +2088,14 @@ mod tests {
         expect(
             "??_9nsDocument@@$BDMI@AE",
             "[thunk]: __thiscall nsDocument::`vcall'{968,{flat}}' }",
+        );
+        expect(
+            "??_R0?AUCollationCacheEntry@icu_61@@@8",
+            "struct icu_61::CollationCacheEntry::`RTTI Type Descriptor\'",
+        );
+        expect(
+            "??_R0?AV?$KxTree@V?$KxSpe@DI@@I@@@8",
+            "class KxTree<class KxSpe<char,unsigned int>,unsigned int>::`RTTI Type Descriptor'",
         );
     }
 
