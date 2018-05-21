@@ -193,6 +193,7 @@ pub enum Operator<'a> {
     LiteralOperatorName,
 
     RTTITypeDescriptor(StorageClass, Box<Type<'a>>),
+    RTTIBaseClassArray,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -799,6 +800,9 @@ impl<'a> ParserState<'a> {
                             let storage_class = self.read_storage_class();
                             let t = self.read_var_type(storage_class)?;
                             Operator::RTTITypeDescriptor(storage_class, Box::new(t))
+                        }
+                        b'2' => {
+                            Operator::RTTIBaseClassArray
                         }
                         _ => panic!("unknown RTTI Operator Name"),
                     }
@@ -1759,6 +1763,9 @@ impl<'a> Serializer<'a> {
                 write!(self.w, "::`RTTI Type Descriptor'")?;
                 return Ok(());
             },
+            &Operator::RTTIBaseClassArray => {
+                "`RTTI Base Class Array'"
+            }
         };
         write!(self.w, "{}", s)?;
         Ok(())
@@ -2096,6 +2103,10 @@ mod tests {
         expect(
             "??_R0?AV?$KxTree@V?$KxSpe@DI@@I@@@8",
             "class KxTree<class KxSpe<char,unsigned int>,unsigned int>::`RTTI Type Descriptor'",
+        );
+        expect(
+            "??_R2A@@8",
+            "A::`RTTI Base Class Array'"
         );
     }
 
