@@ -193,8 +193,9 @@ pub enum Operator<'a> {
     LiteralOperatorName,
 
     RTTITypeDescriptor(StorageClass, Box<Type<'a>>),
+    RTTIBaseClassDescriptor(i32, i32, i32, i32),
     RTTIBaseClassArray,
-    RTTIClassHierarchyDescriptor
+    RTTIClassHierarchyDescriptor,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -801,6 +802,13 @@ impl<'a> ParserState<'a> {
                             let storage_class = self.read_storage_class();
                             let t = self.read_var_type(storage_class)?;
                             Operator::RTTITypeDescriptor(storage_class, Box::new(t))
+                        }
+                        b'1' => {
+                            let nv_offset = self.read_number()?;
+                            let vbptr_offset = self.read_number()?;
+                            let vbtable_offset = self.read_number()?;
+                            let flags = self.read_number()?;
+                            Operator::RTTIBaseClassDescriptor(nv_offset, vbptr_offset, vbtable_offset, flags)
                         }
                         b'2' => {
                             Operator::RTTIBaseClassArray
@@ -1772,6 +1780,11 @@ impl<'a> Serializer<'a> {
                 write!(self.w, "::`RTTI Type Descriptor'")?;
                 return Ok(());
             },
+            &Operator::RTTIBaseClassDescriptor(nv_offset, vbptr_offset, vbtable_offset, flags) => {
+                write!(self.w, "`RTTI Base Class Descriptor at ({},{},{},{})'",
+                       nv_offset, vbptr_offset, vbtable_offset, flags)?;
+                return Ok(());
+            },
             &Operator::RTTIBaseClassArray => {
                 "`RTTI Base Class Array'"
             }
@@ -2124,6 +2137,10 @@ mod tests {
             "??_R3UO@i@@8",
             "i::UO::`RTTI Class Hierarchy Descriptor'"
         );
+        expect(
+            "??_R1A@?0A@EA@U@i@@8",
+            "i::U::`RTTI Base Class Descriptor at (0,-1,0,64)'"
+        )
     }
 
     #[test]
