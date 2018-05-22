@@ -194,6 +194,7 @@ pub enum Operator<'a> {
 
     RTTITypeDescriptor(StorageClass, Box<Type<'a>>),
     RTTIBaseClassArray,
+    RTTIClassHierarchyDescriptor
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -803,6 +804,9 @@ impl<'a> ParserState<'a> {
                         }
                         b'2' => {
                             Operator::RTTIBaseClassArray
+                        }
+                        b'3' => {
+                            Operator::RTTIClassHierarchyDescriptor
                         }
                         _ => panic!("unknown RTTI Operator Name"),
                     }
@@ -1766,6 +1770,9 @@ impl<'a> Serializer<'a> {
             &Operator::RTTIBaseClassArray => {
                 "`RTTI Base Class Array'"
             }
+            &Operator::RTTIClassHierarchyDescriptor => {
+                "`RTTI Class Hierarchy Descriptor'"
+            }
         };
         write!(self.w, "{}", s)?;
         Ok(())
@@ -2107,6 +2114,10 @@ mod tests {
         expect(
             "??_R2A@@8",
             "A::`RTTI Base Class Array'"
+        );
+        expect(
+            "??_R3UO@i@@8",
+            "i::UO::`RTTI Class Hierarchy Descriptor'"
         );
     }
 
