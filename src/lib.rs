@@ -808,7 +808,12 @@ impl<'a> ParserState<'a> {
                         b'3' => {
                             Operator::RTTIClassHierarchyDescriptor
                         }
-                        _ => panic!("unknown RTTI Operator Name"),
+                        _ => {
+                            return Err(Error::new(format!(
+                                "unknown RTTI Operator name: {}",
+                                str::from_utf8(&[c])?
+                            )));
+                        }
                     }
                 }
                 b'S' => Operator::LocalVFTable,
