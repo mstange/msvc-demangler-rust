@@ -84,8 +84,8 @@ bitflags! {
         const COMPLETE = 0x0000;
         /// Undecorate only the name for primary declaration. Returns [scope::]name. Does expand template parameters.
         const NAME_ONLY = 0x1000;
-        // /// Disable expansion of access specifiers for members.
-        // const NO_ACCESS_SPECIFIERS = 0x0080;
+        /// Disable expansion of access specifiers for members.
+        const NO_ACCESS_SPECIFIERS = 0x0080;
         // /// Disable expansion of the declaration language specifier.
         // const NO_ALLOCATION_LANGUAGE = 0x0010;
         // /// Disable expansion of the declaration model.
@@ -94,14 +94,14 @@ bitflags! {
         // const NO_ARGUMENTS = 0x2000;
         /// Disable expansion of CodeView modifiers on the this type for primary declaration.
         const NO_CV_THISTYPE = 0x0040;
-        // /// Disable expansion of return types for primary declarations.
-        // const NO_FUNCTION_RETURNS = 0x0004;
+        /// Disable expansion of return types for primary declarations.
+        const NO_FUNCTION_RETURNS = 0x0004;
         // /// Remove leading underscores from Microsoft keywords.
         // const NO_LEADING_UNDERSCORES = 0x0001;
-        // /// Disable expansion of the static or virtual attribute of members.
-        // const NO_MEMBER_TYPE = 0x0200;
-        // /// Disable expansion of Microsoft keywords.
-        // const NO_MS_KEYWORDS = 0x0002;
+        /// Disable expansion of the static or virtual attribute of members.
+        const NO_MEMBER_TYPE = 0x0200;
+        /// Disable expansion of Microsoft keywords.
+        const NO_MS_KEYWORDS = 0x0002;
         /// Disable expansion of Microsoft keywords on the this type for primary declaration.
         const NO_MS_THISTYPE = 0x0020;
         // /// Disable expansion of the Microsoft model for user-defined type returns.
@@ -1346,7 +1346,7 @@ struct Serializer<'a> {
 
 impl<'a> Serializer<'a> {
     fn serialize(&mut self, parse_result: &ParseResult) -> SerializeResult<()> {
-        if !self.flags.contains(DemangleFlags::NAME_ONLY) {
+        if !self.flags.intersects(DemangleFlags::NAME_ONLY | DemangleFlags::NO_FUNCTION_RETURNS) {
             self.write_pre(&parse_result.symbol_type)?;
         }
         self.write_name(&parse_result.symbol)?;
@@ -1361,24 +1361,26 @@ impl<'a> Serializer<'a> {
         } else {
             write!(self.w, " ")?;
         }
-        match calling_conv {
-            CallingConv::Cdecl => {
-                write!(self.w, "__cdecl ")?;
-            }
-            CallingConv::Pascal => {}
-            CallingConv::Thiscall => {
-                write!(self.w, "__thiscall ")?;
-            }
-            CallingConv::Stdcall => {
-                write!(self.w, "__stdcall ")?;
-            }
-            CallingConv::Fastcall => {
-                write!(self.w, "__fastcall ")?;
-            }
-            CallingConv::_Regcall => {
-                write!(self.w, "__regcall ")?;
-            }
-        };
+        if !self.flags.contains(DemangleFlags::NO_MS_KEYWORDS) {
+            match calling_conv {
+                CallingConv::Cdecl => {
+                    write!(self.w, "__cdecl ")?;
+                }
+                CallingConv::Pascal => {}
+                CallingConv::Thiscall => {
+                    write!(self.w, "__thiscall ")?;
+                }
+                CallingConv::Stdcall => {
+                    write!(self.w, "__stdcall ")?;
+                }
+                CallingConv::Fastcall => {
+                    write!(self.w, "__fastcall ")?;
+                }
+                CallingConv::_Regcall => {
+                    write!(self.w, "__regcall ")?;
+                }
+            };
+        }
 
         Ok(())
     }
@@ -1391,20 +1393,24 @@ impl<'a> Serializer<'a> {
                 if func_class.contains(FuncClass::THUNK) {
                     write!(self.w, "[thunk]:")?
                 }
-                if func_class.contains(FuncClass::PRIVATE) {
-                    write!(self.w, "private: ")?
+                if !self.flags.contains(DemangleFlags::NO_ACCESS_SPECIFIERS) {
+                    if func_class.contains(FuncClass::PRIVATE) {
+                        write!(self.w, "private: ")?
+                    }
+                    if func_class.contains(FuncClass::PROTECTED) {
+                        write!(self.w, "protected: ")?
+                    }
+                    if func_class.contains(FuncClass::PUBLIC) {
+                        write!(self.w, "public: ")?
+                    }
                 }
-                if func_class.contains(FuncClass::PROTECTED) {
-                    write!(self.w, "protected: ")?
-                }
-                if func_class.contains(FuncClass::PUBLIC) {
-                    write!(self.w, "public: ")?
-                }
-                if func_class.contains(FuncClass::STATIC) {
-                    write!(self.w, "static ")?
-                }
-                if func_class.contains(FuncClass::VIRTUAL) {
-                    write!(self.w, "virtual ")?;
+                if !self.flags.contains(DemangleFlags::NO_MEMBER_TYPE) {
+                    if func_class.contains(FuncClass::STATIC) {
+                        write!(self.w, "static ")?
+                    }
+                    if func_class.contains(FuncClass::VIRTUAL) {
+                        write!(self.w, "virtual ")?;
+                    }
                 }
                 self.write_pre(inner)?;
                 self.write_calling_conv(calling_conv)?;
