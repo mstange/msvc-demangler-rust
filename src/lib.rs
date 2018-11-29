@@ -112,6 +112,9 @@ bitflags! {
         const NO_THISTYPE = Self::NO_MS_THISTYPE.bits | Self::NO_CV_THISTYPE.bits;
         // /// Disable expansion of throw-signatures for functions and pointers to functions.
         // const NO_THROW_SIGNATURES = 0x0100;
+        /// Disable output of struct/union/class/enum specifiers.
+        // (Not sure if this duplicates an existing flag)
+        const NO_CLASS_TYPE = 0x100000;
     }
 }
 
@@ -1346,7 +1349,10 @@ struct Serializer<'a> {
 
 impl<'a> Serializer<'a> {
     fn serialize(&mut self, parse_result: &ParseResult) -> SerializeResult<()> {
-        if !self.flags.intersects(DemangleFlags::NAME_ONLY | DemangleFlags::NO_FUNCTION_RETURNS) {
+        if !self
+            .flags
+            .intersects(DemangleFlags::NAME_ONLY | DemangleFlags::NO_FUNCTION_RETURNS)
+        {
             self.write_pre(&parse_result.symbol_type)?;
         }
         self.write_name(&parse_result.symbol)?;
@@ -1719,8 +1725,10 @@ impl<'a> Serializer<'a> {
     }
 
     fn write_class(&mut self, names: &Symbol, s: &str) -> SerializeResult<()> {
-        write!(self.w, "{}", s)?;
-        write!(self.w, " ")?;
+        if !self.flags.contains(DemangleFlags::NO_CLASS_TYPE) {
+            write!(self.w, "{}", s)?;
+            write!(self.w, " ")?;
+        }
         self.write_name(names)?;
         Ok(())
     }
