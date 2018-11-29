@@ -8,8 +8,7 @@ fn main() {
     let args = env::args();
 
     let print_demangled = |sym: &str| {
-        let demangled =
-            msvc_demangler::demangle(&sym, msvc_demangler::DemangleFlags::COMPLETE);
+        let demangled = msvc_demangler::demangle(&sym, msvc_demangler::DemangleFlags::COMPLETE);
         match demangled {
             Ok(ref string) => println!("{}", string),
             _ => println!("{}", sym),
