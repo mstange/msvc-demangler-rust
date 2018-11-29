@@ -115,6 +115,8 @@ bitflags! {
         /// Disable output of struct/union/class/enum specifiers.
         // (Not sure if this duplicates an existing flag)
         const NO_CLASS_TYPE = 0x100000;
+        /// Insert a space after each comma.
+        const SPACE_AFTER_COMMA = 0x200000;
     }
 }
 
@@ -1716,6 +1718,9 @@ impl<'a> Serializer<'a> {
             self.write_pre(param)?;
             self.write_post(param)?;
             write!(self.w, ",")?;
+            if self.flags.contains(DemangleFlags::SPACE_AFTER_COMMA) {
+                write!(self.w, " ")?;
+            }
         }
         if let Some(param) = types.last() {
             self.write_pre(param)?;
