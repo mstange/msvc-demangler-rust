@@ -117,6 +117,8 @@ bitflags! {
         const NO_CLASS_TYPE = 0x100000;
         /// Insert a space after each comma.
         const SPACE_AFTER_COMMA = 0x200000;
+        /// Make * and & hug the type name.
+        const HUG_TYPE = 0x400000;
     }
 }
 
@@ -1492,15 +1494,21 @@ impl<'a> Serializer<'a> {
 
                 match t {
                     &Type::Ptr(_, _) => {
-                        self.write_space()?;
+                        if !self.flags.contains(DemangleFlags::HUG_TYPE) {
+                            self.write_space()?;
+                        }
                         write!(self.w, "*")?
                     }
                     &Type::Ref(_, _) => {
-                        self.write_space()?;
+                        if !self.flags.contains(DemangleFlags::HUG_TYPE) {
+                            self.write_space()?;
+                        }
                         write!(self.w, "&")?
                     }
                     &Type::RValueRef(_, _) => {
-                        self.write_space()?;
+                        if !self.flags.contains(DemangleFlags::HUG_TYPE) {
+                            self.write_space()?;
+                        }
                         write!(self.w, "&&")?
                     }
                     _ => {}
