@@ -76,10 +76,43 @@ bitflags! {
     }
 }
 
-#[derive(PartialEq, Clone, Copy)]
-pub enum DemangleFlags {
-    LessWhitespace,
-    LotsOfWhitespace,
+bitflags! {
+    pub struct DemangleFlags: u32 {
+        /// Undecorate 32-bit decorated names.
+        const DECODE_32_BIT = 0x0800;
+        /// Enable full undecoration.
+        const COMPLETE = 0x0000;
+        /// Undecorate only the name for primary declaration. Returns [scope::]name. Does expand template parameters.
+        const NAME_ONLY = 0x1000;
+        // /// Disable expansion of access specifiers for members.
+        // const NO_ACCESS_SPECIFIERS = 0x0080;
+        // /// Disable expansion of the declaration language specifier.
+        // const NO_ALLOCATION_LANGUAGE = 0x0010;
+        // /// Disable expansion of the declaration model.
+        // const NO_ALLOCATION_MODEL = 0x0008;
+        // /// Do not undecorate function arguments.
+        // const NO_ARGUMENTS = 0x2000;
+        /// Disable expansion of CodeView modifiers on the this type for primary declaration.
+        const NO_CV_THISTYPE = 0x0040;
+        // /// Disable expansion of return types for primary declarations.
+        // const NO_FUNCTION_RETURNS = 0x0004;
+        // /// Remove leading underscores from Microsoft keywords.
+        // const NO_LEADING_UNDERSCORES = 0x0001;
+        // /// Disable expansion of the static or virtual attribute of members.
+        // const NO_MEMBER_TYPE = 0x0200;
+        // /// Disable expansion of Microsoft keywords.
+        // const NO_MS_KEYWORDS = 0x0002;
+        /// Disable expansion of Microsoft keywords on the this type for primary declaration.
+        const NO_MS_THISTYPE = 0x0020;
+        // /// Disable expansion of the Microsoft model for user-defined type returns.
+        // const NO_RETURN_UDT_MODEL = 0x0400;
+        // /// Do not undecorate special names, such as vtable, vcall, vector, metatype, and so on.
+        // const NO_SPECIAL_SYMS = 0x4000;
+        /// Disable all modifiers on the this type.
+        const NO_THISTYPE = Self::NO_MS_THISTYPE.bits | Self::NO_CV_THISTYPE.bits;
+        // /// Disable expansion of throw-signatures for functions and pointers to functions.
+        // const NO_THROW_SIGNATURES = 0x0100;
+    }
 }
 
 // Calling conventions
@@ -1281,9 +1314,13 @@ struct Serializer<'a> {
 
 impl<'a> Serializer<'a> {
     fn serialize(&mut self, parse_result: &ParseResult) -> SerializeResult<()> {
-        self.write_pre(&parse_result.symbol_type)?;
+        if !self.flags.contains(DemangleFlags::NAME_ONLY) {
+            self.write_pre(&parse_result.symbol_type)?;
+        }
         self.write_name(&parse_result.symbol)?;
-        self.write_post(&parse_result.symbol_type)?;
+        if !self.flags.contains(DemangleFlags::NAME_ONLY) {
+            self.write_post(&parse_result.symbol_type)?;
+        }
         Ok(())
     }
 
@@ -1345,13 +1382,9 @@ impl<'a> Serializer<'a> {
             &Type::MemberFunctionPointer(ref symbol, _, calling_conv, _, _, ref inner) => {
                 self.write_pre(inner)?;
                 self.write_calling_conv(calling_conv)?;
-                if self.flags == DemangleFlags::LotsOfWhitespace {
-                    self.write_space()?;
-                }
+                self.write_space()?;
                 write!(self.w, "(")?;
-                if self.flags == DemangleFlags::LotsOfWhitespace {
-                    self.write_space()?;
-                }
+                self.write_space()?;
                 self.write_name(symbol)?;
                 write!(self.w, "::*)")?;
                 return Ok(());
@@ -1406,9 +1439,7 @@ impl<'a> Serializer<'a> {
                     &Type::MemberFunction(_, _, _, _, _)
                     | &Type::NonMemberFunction(_, _, _, _)
                     | &Type::Array(_, _, _) => {
-                        if self.flags == DemangleFlags::LotsOfWhitespace {
-                            self.write_space()?;
-                        }
+                        self.write_space()?;
                         write!(self.w, "(")?;
                     }
                     _ => {}
@@ -1416,21 +1447,15 @@ impl<'a> Serializer<'a> {
 
                 match t {
                     &Type::Ptr(_, _) => {
-                        if self.flags == DemangleFlags::LotsOfWhitespace {
-                            self.write_space()?;
-                        }
+                        self.write_space()?;
                         write!(self.w, "*")?
                     }
                     &Type::Ref(_, _) => {
-                        if self.flags == DemangleFlags::LotsOfWhitespace {
-                            self.write_space()?;
-                        }
+                        self.write_space()?;
                         write!(self.w, "&")?
                     }
                     &Type::RValueRef(_, _) => {
-                        if self.flags == DemangleFlags::LotsOfWhitespace {
-                            self.write_space()?;
-                        }
+                        self.write_space()?;
                         write!(self.w, "&&")?
                     }
                     _ => {}
@@ -1559,18 +1584,20 @@ impl<'a> Serializer<'a> {
     }
 
     fn write_memfn_qualifiers(&mut self, sc: StorageClass) -> SerializeResult<()> {
+        if self.flags.contains(DemangleFlags::NO_THISTYPE) {
+            // TODO: should probably check for NO_CV_THISTYPE and NO_MS_THISTYPE
+            // separately but I don't know what exactly those affect.
+            return Ok(());
+        }
         let mut write_one_qual = |flag, s| -> SerializeResult<()> {
             if sc.contains(flag) {
                 self.w.write(s)?;
-                if self.flags == DemangleFlags::LotsOfWhitespace {
-                    self.write_space()?;
-                }
+                self.write_space()?;
             }
 
             Ok(())
         };
 
-        // TODO: DemangleFlags::LessWhitespace means we run all these together.
         write_one_qual(StorageClass::CONST, b"const")?;
         // __restrict is different than `restrict`, keep the underscores!
         write_one_qual(StorageClass::RESTRICT, b"__restrict")?;
@@ -1603,9 +1630,7 @@ impl<'a> Serializer<'a> {
 
                 if sc.contains(StorageClass::CONST) {
                     write!(self.w, "const")?;
-                    if self.flags == DemangleFlags::LotsOfWhitespace {
-                        self.write_space()?;
-                    }
+                    self.write_space()?;
                 }
             }
             &Type::CXXVBTable(ref names, _sc) => {
@@ -1667,34 +1692,16 @@ impl<'a> Serializer<'a> {
 
     fn write_space_pre(&mut self) -> SerializeResult<()> {
         if let Some(&c) = self.w.last() {
-            match self.flags {
-                DemangleFlags::LessWhitespace => {
-                    if char::from(c).is_ascii_alphabetic() {
-                        write!(self.w, " ")?;
-                    }
-                }
-                DemangleFlags::LotsOfWhitespace => {
-                    if char::from(c).is_ascii_alphabetic() || c == b'&' || c == b'>' {
-                        write!(self.w, " ")?;
-                    }
-                }
+            if char::from(c).is_ascii_alphabetic() || c == b'&' || c == b'>' {
+                write!(self.w, " ")?;
             }
         }
         Ok(())
     }
     fn write_space(&mut self) -> SerializeResult<()> {
         if let Some(&c) = self.w.last() {
-            match self.flags {
-                DemangleFlags::LessWhitespace => {
-                    if char::from(c).is_ascii_alphabetic() {
-                        write!(self.w, " ")?;
-                    }
-                }
-                DemangleFlags::LotsOfWhitespace => {
-                    if char::from(c).is_ascii_alphabetic() || c == b'*' || c == b'&' || c == b'>' {
-                        write!(self.w, " ")?;
-                    }
-                }
+            if char::from(c).is_ascii_alphabetic() || c == b'*' || c == b'&' || c == b'>' {
+                write!(self.w, " ")?;
             }
         }
         Ok(())
@@ -1799,9 +1806,7 @@ impl<'a> Serializer<'a> {
     fn write_one_name(&mut self, name: &Name) -> SerializeResult<()> {
         match name {
             &Name::Operator(ref op) => {
-                if self.flags == DemangleFlags::LotsOfWhitespace {
-                    self.write_space()?;
-                }
+                self.write_space()?;
                 self.write_operator_name(op)?;
                 //panic!("only the last name should be an operator");
             }
@@ -1872,9 +1877,7 @@ impl<'a> Serializer<'a> {
                         // symbol type.
                     }
                     _ => {
-                        if self.flags == DemangleFlags::LotsOfWhitespace {
-                            self.write_space()?;
-                        }
+                        self.write_space()?;
                         // Print out an overloaded operator.
                         self.write_operator_name(op)?;
                     }
@@ -1974,15 +1977,15 @@ impl<'a> Serializer<'a> {
 
 #[cfg(test)]
 mod tests {
-    fn expect_with_flags(input: &str, reference: &str, flags: ::DemangleFlags) {
-        let demangled: ::Result<_> = ::demangle(input, flags);
+    fn expect_with_flags(input: &str, reference: &str, flags: u32) {
+        let demangled: ::Result<_> = ::demangle(input, ::DemangleFlags::from_bits(flags).unwrap());
         let reference: ::Result<_> = Ok(reference.to_owned());
         assert_eq!(demangled, reference);
     }
 
     // For cases where undname demangles differently/better than we do.
-    fn expect_undname_failure(input: &str, reference: &str) {
-        let demangled: ::Result<_> = ::demangle(input, ::DemangleFlags::LotsOfWhitespace);
+    fn expect_failure(input: &str, reference: &str) {
+        let demangled: ::Result<_> = ::demangle(input, ::DemangleFlags::COMPLETE);
         let reference: ::Result<_> = Ok(reference.to_owned());
         assert_ne!(demangled, reference);
     }
@@ -1993,7 +1996,7 @@ mod tests {
     #[test]
     fn other_tests() {
         let expect = |input, reference| {
-            expect_with_flags(input, reference, ::DemangleFlags::LotsOfWhitespace);
+            expect_with_flags(input, reference, 0x0);
         };
 
         expect("?f@@YAHQBH@Z", "int __cdecl f(int const * const)");
@@ -2024,7 +2027,7 @@ mod tests {
             "??_7?$RunnableMethodImpl@PEAVLazyIdleThread@mozilla@@P812@EAAXXZ$0A@$0A@$$V@detail@mozilla@@6BnsIRunnable@@@",
             "const mozilla::detail::RunnableMethodImpl<class mozilla::LazyIdleThread *,void __cdecl (mozilla::LazyIdleThread::*)(void),0,0>::`vftable\'{for `nsIRunnable\'}",
         );
-        expect_undname_failure(
+        expect_failure(
             "??_7?$RunnableMethodImpl@PEAVLazyIdleThread@mozilla@@P812@EAAXXZ$0A@$0A@$$V@detail@mozilla@@6BnsIRunnable@@@",
             "const mozilla::detail::RunnableMethodImpl<class mozilla::LazyIdleThread * __ptr64,void __cdecl (mozilla::LazyIdleThread::*)(void) __ptr64,0,0>::`vftable\'{for `nsIRunnable\'}",
         );
@@ -2072,7 +2075,7 @@ mod tests {
             "??1?$function@$$A6AXXZ@std@@QAE@XZ",
             "public: __thiscall std::function<void __cdecl (void)>::~function<void __cdecl (void)>(void)",
         );
-        expect_undname_failure(
+        expect_failure(
             "??1?$function@$$A6AXXZ@std@@QAE@XZ",
             "public: __thiscall std::function<void __cdecl(void)>::~function<void __cdecl(void)>(void)",
         );
@@ -2081,7 +2084,7 @@ mod tests {
             "??B?$function@$$A6AXXZ@std@@QBE_NXZ",
             "public: bool __thiscall std::function<void __cdecl (void)>::operatorcast(void)const ",
         );
-        expect_undname_failure(
+        expect_failure(
             "??B?$function@$$A6AXXZ@std@@QBE_NXZ",
             "public: __thiscall std::function<void __cdecl(void)>::operator bool(void)const",
         );
@@ -2089,7 +2092,7 @@ mod tests {
             "??$?RA6AXXZ$$V@SkOnce@@QAEXA6AXXZ@Z",
             "public: void __thiscall SkOnce::operator()<void __cdecl (&)(void)>(void __cdecl (&)(void))",
         );
-        expect_undname_failure(
+        expect_failure(
             "??$?RA6AXXZ$$V@SkOnce@@QAEXA6AXXZ@Z",
             "public: void __thiscall SkOnce::operator()<void (__cdecl&)(void)>(void (__cdecl&)(void))",
         );
@@ -2097,7 +2100,7 @@ mod tests {
             "?foo@A@PR19361@@QIHAEXXZ",
             "public: void __thiscall PR19361::A::foo(void)__restrict && ",
         );
-        expect_undname_failure(
+        expect_failure(
             "?foo@A@PR19361@@QIHAEXXZ",
             "public: void __thiscall PR19361::A::foo(void) __restrict&& ",
         );
@@ -2105,7 +2108,7 @@ mod tests {
             "??$GenericCreateConstructor@$1?construct@SetObject@js@@CA_NPEAUJSContext@@IPEATValue@JS@@@Z$0A@$0A@$0A@@js@@YAPEAVJSObject@@PEAUJSContext@@W4JSProtoKey@@@Z",
             "class JSObject * __cdecl js::GenericCreateConstructor<bool __cdecl (js::SetObject::construct::*)(struct JSContext *,unsigned int,union JS::Value *),0,0,0>(struct JSContext *,enum JSProtoKey)",
         );
-        expect_undname_failure(
+        expect_failure(
             "??$GenericCreateConstructor@$1?construct@SetObject@js@@CA_NPEAUJSContext@@IPEATValue@JS@@@Z$0A@$0A@$0A@@js@@YAPEAVJSObject@@PEAUJSContext@@W4JSProtoKey@@@Z",
             "class JSObject * __ptr64 __cdecl js::GenericCreateConstructor<&private: static bool __cdecl (js::SetObject::construct::*)(struct JSContext * __ptr64,unsigned int,union JS::Value * __ptr64),0,0,0>(struct JSContext * __ptr64,enum JSProtoKey)",
         );
@@ -2146,7 +2149,7 @@ mod tests {
     #[test]
     fn test_strings() {
         let expect = |input, reference| {
-            expect_with_flags(input, reference, ::DemangleFlags::LotsOfWhitespace);
+            expect_with_flags(input, reference, 0x0);
         };
 
         // Test symbols extracted from clang's test/CodeGenCXX/mangle-ms-string-literals.cpp.
@@ -2525,16 +2528,16 @@ mod tests {
     #[test]
     fn upstream_tests() {
         let expect = |input, reference| {
-            expect_with_flags(input, reference, ::DemangleFlags::LessWhitespace);
+            expect_with_flags(input, reference, 0x0);
         };
         expect("?x@@3HA", "int x");
-        expect("?x@@3PEAHEA", "int*x");
-        expect("?x@@3PEAPEAHEA", "int**x");
-        expect("?x@@3PEAY02HEA", "int(*x)[3]");
-        expect("?x@@3PEAY124HEA", "int(*x)[3][5]");
-        expect("?x@@3PEAY02$$CBHEA", "int const(*x)[3]");
-        expect("?x@@3PEAEEA", "unsigned char*x");
-        expect("?x@@3PEAY1NKM@5HEA", "int(*x)[3500][6]");
+        expect("?x@@3PEAHEA", "int *x");
+        expect("?x@@3PEAPEAHEA", "int * *x");
+        expect("?x@@3PEAY02HEA", "int (*x)[3]");
+        expect("?x@@3PEAY124HEA", "int (*x)[3][5]");
+        expect("?x@@3PEAY02$$CBHEA", "int const (*x)[3]");
+        expect("?x@@3PEAEEA", "unsigned char *x");
+        expect("?x@@3PEAY1NKM@5HEA", "int (*x)[3500][6]");
         expect("?x@@YAXMH@Z", "void __cdecl x(float,int)");
         expect("?x@@YAXMH@Z", "void __cdecl x(float,int)");
         expect("?x@@3P6AHMNH@ZEA", "int __cdecl (*x)(float,double,int)");
@@ -2548,22 +2551,22 @@ mod tests {
 
         // Microsoft's undname returns "int const * const x" for this symbol.
         // I believe it's their bug.
-        expect("?x@@3PEBHEB", "int const*x");
+        expect("?x@@3PEBHEB", "int const *x");
 
-        expect("?x@@3QEAHEB", "int*const x");
-        expect("?x@@3QEBHEB", "int const*const x");
+        expect("?x@@3QEAHEB", "int * const x");
+        expect("?x@@3QEBHEB", "int const * const x");
 
-        expect("?x@@3AEBHEB", "int const&x");
+        expect("?x@@3AEBHEB", "int const & x");
 
-        expect("?x@@3PEAUty@@EA", "struct ty*x");
-        expect("?x@@3PEATty@@EA", "union ty*x");
-        expect("?x@@3PEAUty@@EA", "struct ty*x");
-        expect("?x@@3PEAW4ty@@EA", "enum ty*x");
-        expect("?x@@3PEAVty@@EA", "class ty*x");
+        expect("?x@@3PEAUty@@EA", "struct ty *x");
+        expect("?x@@3PEATty@@EA", "union ty *x");
+        expect("?x@@3PEAUty@@EA", "struct ty *x");
+        expect("?x@@3PEAW4ty@@EA", "enum ty *x");
+        expect("?x@@3PEAVty@@EA", "class ty *x");
 
-        expect("?x@@3PEAV?$tmpl@H@@EA", "class tmpl<int>*x");
-        expect("?x@@3PEAU?$tmpl@H@@EA", "struct tmpl<int>*x");
-        expect("?x@@3PEAT?$tmpl@H@@EA", "union tmpl<int>*x");
+        expect("?x@@3PEAV?$tmpl@H@@EA", "class tmpl<int> *x");
+        expect("?x@@3PEAU?$tmpl@H@@EA", "struct tmpl<int> *x");
+        expect("?x@@3PEAT?$tmpl@H@@EA", "union tmpl<int> *x");
         expect("?instance@@3Vklass@@A", "class klass instance");
         expect(
             "?instance$initializer$@@3P6AXXZEA",
@@ -2573,30 +2576,30 @@ mod tests {
         expect("??1klass@@QEAA@XZ", "public: __cdecl klass::~klass(void)");
         expect(
             "?x@@YAHPEAVklass@@AEAV1@@Z",
-            "int __cdecl x(class klass*,class klass&)",
+            "int __cdecl x(class klass *,class klass &)",
         );
         expect(
             "?x@ns@@3PEAV?$klass@HH@1@EA",
-            "class ns::klass<int,int>*ns::x",
+            "class ns::klass<int,int> *ns::x",
         );
         expect(
             "?fn@?$klass@H@ns@@QEBAIXZ",
-            "public: unsigned int __cdecl ns::klass<int>::fn(void)const",
+            "public: unsigned int __cdecl ns::klass<int>::fn(void)const ",
         );
 
         expect(
             "??4klass@@QEAAAEBV0@AEBV0@@Z",
-            "public: class klass const& __cdecl klass::operator=(class klass const&)",
+            "public: class klass const & __cdecl klass::operator=(class klass const &)",
         );
         expect("??7klass@@QEAA_NXZ",
                "public: bool __cdecl klass::operator!(void)");
         expect(
             "??8klass@@QEAA_NAEBV0@@Z",
-            "public: bool __cdecl klass::operator==(class klass const&)",
+            "public: bool __cdecl klass::operator==(class klass const &)",
         );
         expect(
             "??9klass@@QEAA_NAEBV0@@Z",
-            "public: bool __cdecl klass::operator!=(class klass const&)",
+            "public: bool __cdecl klass::operator!=(class klass const &)",
         );
         expect("??Aklass@@QEAAH_K@Z",
                "public: int __cdecl klass::operator[](uint64_t)");
@@ -2662,27 +2665,27 @@ mod tests {
                "public: int __cdecl klass::operator^=(int)");
         expect(
             "??6@YAAEBVklass@@AEBV0@H@Z",
-            "class klass const& __cdecl operator<<(class klass const&,int)",
+            "class klass const & __cdecl operator<<(class klass const &,int)",
         );
         expect(
             "??5@YAAEBVklass@@AEBV0@_K@Z",
-            "class klass const& __cdecl operator>>(class klass const&,uint64_t)",
+            "class klass const & __cdecl operator>>(class klass const &,uint64_t)",
         );
         expect(
             "??2@YAPEAX_KAEAVklass@@@Z",
-            "void* __cdecl operator new(uint64_t,class klass&)",
+            "void * __cdecl operator new(uint64_t,class klass &)",
         );
         expect(
             "??_U@YAPEAX_KAEAVklass@@@Z",
-            "void* __cdecl operator new[](uint64_t,class klass&)",
+            "void * __cdecl operator new[](uint64_t,class klass &)",
         );
         expect(
             "??3@YAXPEAXAEAVklass@@@Z",
-            "void __cdecl operator delete(void*,class klass&)",
+            "void __cdecl operator delete(void *,class klass &)",
         );
         expect(
             "??_V@YAXPEAXAEAVklass@@@Z",
-            "void __cdecl operator delete[](void*,class klass&)",
+            "void __cdecl operator delete[](void *,class klass &)",
         );
     }
 }

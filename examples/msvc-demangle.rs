@@ -8,7 +8,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    match demangle(&args[1], DemangleFlags::LotsOfWhitespace) {
+    match demangle(&args[1], DemangleFlags::COMPLETE) {
         Ok(s) => {
             println!("{}", s);
         }
@@ -18,5 +18,3 @@ fn main() {
         }
     }
 }
-
-
