@@ -1109,7 +1109,7 @@ impl<'a> ParserState<'a> {
             if self.consume(b"$Q") {
                 return Ok(Type::RValueRef(Box::new(self.read_pointee()?), sc));
             }
-            if self.consume(b"$V") {
+            if self.consume(b"S") || self.consume(b"$V") || self.consume(b"$Z") || self.consume(b"$$V") {
                 return Ok(Type::EmptyParameterPack);
             }
             if self.consume(b"$T") {
@@ -1182,6 +1182,7 @@ impl<'a> ParserState<'a> {
                 b'J' => Type::Int64(sc),
                 b'K' => Type::Uint64(sc),
                 b'W' => Type::Wchar(sc),
+                b'Q' => Type::Char(sc),
                 b'S' => Type::Char16(sc),
                 b'U' => Type::Char32(sc),
                 _ => {
@@ -1722,15 +1723,13 @@ impl<'a> Serializer<'a> {
 
     // Write a function or template parameter list.
     fn write_types(&mut self, types: &[Type]) -> SerializeResult<()> {
-        for param in types.iter().take(types.len() - 1) {
-            self.write_pre(param)?;
-            self.write_post(param)?;
-            write!(self.w, ",")?;
-            if self.flags.contains(DemangleFlags::SPACE_AFTER_COMMA) {
-                write!(self.w, " ")?;
+        for (idx, param) in types.iter().filter(|x| **x != Type::EmptyParameterPack).enumerate() {
+            if idx > 0 {
+                write!(self.w, ",")?;
+                if self.flags.contains(DemangleFlags::SPACE_AFTER_COMMA) {
+                    write!(self.w, " ")?;
+                }
             }
-        }
-        if let Some(param) = types.last() {
             self.write_pre(param)?;
             self.write_post(param)?;
         }
@@ -1957,15 +1956,9 @@ impl<'a> Serializer<'a> {
     }
 
     fn write_tmpl_params<'b>(&mut self, params: &Params<'b>) -> SerializeResult<()> {
-        let types = if let Some(&Type::EmptyParameterPack) = params.types.last() {
-            &params.types[0..params.types.len() - 1]
-        } else {
-            &params.types
-        };
-
         write!(self.w, "<")?;
-        if !types.is_empty() {
-            self.write_types(types)?;
+        if !params.types.is_empty() {
+            self.write_types(&params.types)?;
             if let Some(&b'>') = self.w.last() {
                 write!(self.w, " ")?;
             }
@@ -2817,6 +2810,34 @@ mod tests {
         expect(
             "??_V@YAXPEAXAEAVklass@@@Z",
             "void __cdecl operator delete[](void *,class klass &)",
+        );
+        expect(
+            "?DispatchToCallback@?$I@U?$Y@$S@y@x@@$$V@y@x@@QEAAXV?$C@$$A6AXXZ@base@@@Z",
+            "public: void __cdecl x::y::I<struct x::y::Y<> >::DispatchToCallback(class base::C<void __cdecl (void)>)",
+        );
+        expect(
+            "?DispatchToCallback@?$I@U?$Y@$$Z@y@x@@$$V@y@x@@QEAAXV?$C@$$A6AXXZ@base@@@Z",
+            "public: void __cdecl x::y::I<struct x::y::Y<> >::DispatchToCallback(class base::C<void __cdecl (void)>)",
+        );
+        expect(
+            "??$func@H$$ZH@@YAHAEBU?$Foo@H@@0@Z",
+            "int __cdecl func<int,int>(struct Foo<int> const &,struct Foo<int> const &)",
+        );
+        expect(
+            "??$func@HH$$Z@@YAHAEBU?$Foo@H@@0@Z",
+            "int __cdecl func<int,int>(struct Foo<int> const &,struct Foo<int> const &)",
+        );
+        expect(
+            "??$templ_fun_with_pack@$S@@YAXXZ",
+            "void __cdecl templ_fun_with_pack<>(void)",
+        );
+        expect(
+            "??$templ_fun_with_ty_pack@$$$V@@YAXXZ",
+            "void __cdecl templ_fun_with_ty_pack<>(void)",
+        );
+        expect(
+            "??$templ_fun_with_ty_pack@$$V@@YAXXZ",
+            "void __cdecl templ_fun_with_ty_pack<>(void)",
         );
     }
 }
