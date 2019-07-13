@@ -1691,7 +1691,6 @@ impl<'a> Serializer<'a> {
             if sc.contains(flag) {
                 self.write_space()?;
                 self.w.write(s)?;
-                self.write_space()?;
             }
 
             Ok(())
@@ -2202,7 +2201,7 @@ mod tests {
         // Not great (`operatorcast`, space at the end), but at least make sure we don't regress.
         expect(
             "??B?$function@$$A6AXXZ@std@@QBE_NXZ",
-            "public: bool __thiscall std::function<void __cdecl (void)>::operatorcast(void) const ",
+            "public: bool __thiscall std::function<void __cdecl (void)>::operatorcast(void) const",
         );
         expect_failure(
             "??B?$function@$$A6AXXZ@std@@QBE_NXZ",
@@ -2218,7 +2217,7 @@ mod tests {
         );
         expect(
             "?foo@A@PR19361@@QIHAEXXZ",
-            "public: void __thiscall PR19361::A::foo(void) __restrict && ",
+            "public: void __thiscall PR19361::A::foo(void) __restrict &&",
         );
         expect_failure(
             "?foo@A@PR19361@@QIHAEXXZ",
@@ -2707,7 +2706,7 @@ mod tests {
         );
         expect(
             "?fn@?$klass@H@ns@@QEBAIXZ",
-            "public: unsigned int __cdecl ns::klass<int>::fn(void) const ",
+            "public: unsigned int __cdecl ns::klass<int>::fn(void) const",
         );
 
         expect(
