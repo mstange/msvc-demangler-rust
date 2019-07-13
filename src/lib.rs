@@ -104,6 +104,8 @@ bitflags! {
         const NO_MS_KEYWORDS = 0x0002;
         /// Disable expansion of Microsoft keywords on the this type for primary declaration.
         const NO_MS_THISTYPE = 0x0020;
+        /// Enable Microsoft type names.
+        const MS_TYPENAMES = 0x0400;
         // /// Disable expansion of the Microsoft model for user-defined type returns.
         // const NO_RETURN_UDT_MODEL = 0x0400;
         // /// Do not undecorate special names, such as vtable, vcall, vector, metatype, and so on.
@@ -129,6 +131,7 @@ impl DemangleFlags {
         DemangleFlags::COMPLETE |
         DemangleFlags::SPACE_AFTER_COMMA |
         DemangleFlags::SPACE_BEFORE_POINTER |
+        DemangleFlags::MS_TYPENAMES |
         DemangleFlags::HUG_TYPE
     }
 }
@@ -717,7 +720,7 @@ impl<'a> ParserState<'a> {
                         self.memorize_name(&name);
                         name
                     } else if self.consume(b"A") {
-                        // Anonymous namespace.
+                        // A__cdecl *instanc'onymous namespace.
                         if self.consume(b"0x") {
                             while self.consume_hex_digit() {}
                         }
@@ -1320,7 +1323,7 @@ impl<'a> ParserState<'a> {
 }
 
 pub fn demangle<'a>(input: &'a str, flags: DemangleFlags) -> Result<String> {
-    serialize(&dbg!(parse(input)?), flags)
+    serialize(&parse(input)?, flags)
 }
 
 pub fn parse<'a>(input: &'a str) -> Result<ParseResult> {
@@ -1610,7 +1613,11 @@ impl<'a> Serializer<'a> {
                 sc
             }
             &Type::Uint64(sc) => {
-                write!(self.w, "uint64_t")?;
+                if self.flags.contains(DemangleFlags::MS_TYPENAMES) {
+                    write!(self.w, "unsigned __int64")?;
+                } else {
+                    write!(self.w, "uint64_t")?;
+                }
                 sc
             }
             &Type::Wchar(sc) => {
@@ -1673,6 +1680,7 @@ impl<'a> Serializer<'a> {
         }
         let mut write_one_qual = |flag, s| -> SerializeResult<()> {
             if sc.contains(flag) {
+                self.write_space()?;
                 self.w.write(s)?;
                 self.write_space()?;
             }
@@ -1779,7 +1787,7 @@ impl<'a> Serializer<'a> {
 
     fn write_space_pre(&mut self) -> SerializeResult<()> {
         if let Some(&c) = self.w.last() {
-            if char::from(c).is_ascii_alphabetic() || c == b'&' || c == b'>' {
+            if char::from(c).is_ascii_alphabetic() || c == b'&' || c == b'>' || c == b')' {
                 write!(self.w, " ")?;
             }
         }
@@ -1788,7 +1796,7 @@ impl<'a> Serializer<'a> {
 
     fn write_space_ptr(&mut self) -> SerializeResult<()> {
         if let Some(&c) = self.w.last() {
-            if char::from(c).is_ascii_alphabetic() || c == b'>' {
+            if char::from(c).is_ascii_alphabetic() || c == b'>' || c == b')' {
                 write!(self.w, " ")?;
             }
         }
@@ -1797,7 +1805,7 @@ impl<'a> Serializer<'a> {
 
     fn write_space(&mut self) -> SerializeResult<()> {
         if let Some(&c) = self.w.last() {
-            if char::from(c).is_ascii_alphabetic() || c == b'*' || c == b'&' || c == b'>' {
+            if char::from(c).is_ascii_alphabetic() || c == b'*' || c == b'&' || c == b'>' || c == b')' {
                 write!(self.w, " ")?;
             }
         }
@@ -1920,7 +1928,7 @@ impl<'a> Serializer<'a> {
                 write!(self.w, "`{}'", serialize(val, self.flags).unwrap())?;
             }
             &Name::AnonymousNamespace => {
-                write!(self.w, "`anonymous namespace`")?;
+                write!(self.w, "`anonymous namespace'")?;
             }
         }
         Ok(())
@@ -2123,7 +2131,7 @@ mod tests {
             "public: __thiscall B::A<uint64_t>::A<uint64_t>(class B::A<uint64_t> &&)",
         );
         expect("??_7nsI@@6B@", "const nsI::`vftable\'");
-        expect("??_7W@?A@@6B@", "const `anonymous namespace`::W::`vftable'");
+        expect("??_7W@?A@@6B@", "const `anonymous namespace'::W::`vftable'");
         expect(
             "??_7?$RunnableMethodImpl@PEAVLazyIdleThread@mozilla@@P812@EAAXXZ$0A@$0A@$$V@detail@mozilla@@6BnsIRunnable@@@",
             "const mozilla::detail::RunnableMethodImpl<class mozilla::LazyIdleThread *,void __cdecl (mozilla::LazyIdleThread::*)(void),0,0>::`vftable\'{for `nsIRunnable\'}",
@@ -2139,7 +2147,7 @@ mod tests {
         /* XXX: undname prints void (__thiscall*)(void *) for the parameter type. */
         expect(
             "??_I@YGXPAXIIP6EX0@Z@Z",
-            "void __stdcall `vector destructor iterator'(void *,unsigned int,unsigned int,void __thiscall (*)(void *))",
+            "void __stdcall `vector destructor iterator'(void *,unsigned int,unsigned int,void (__thiscall *)(void *))",
         );
         expect(
             "??_GnsWindowsShellService@@EAEPAXI@Z",
@@ -2155,7 +2163,7 @@ mod tests {
         );
         expect(
             "??_GDynamicFrameEventFilter@?A0xcdaa5fa8@@AAEPAXI@Z",
-            "private: void * __thiscall `anonymous namespace`::DynamicFrameEventFilter::`scalar deleting destructor\'(unsigned int)",
+            "private: void * __thiscall `anonymous namespace'::DynamicFrameEventFilter::`scalar deleting destructor\'(unsigned int)",
         );
         /* XXX: undname tacks on `adjustor{16}` to the name. */
         expect(
@@ -2185,15 +2193,15 @@ mod tests {
         // Not great (`operatorcast`, space at the end), but at least make sure we don't regress.
         expect(
             "??B?$function@$$A6AXXZ@std@@QBE_NXZ",
-            "public: bool __thiscall std::function<void __cdecl (void)>::operatorcast(void)const ",
+            "public: bool __thiscall std::function<void __cdecl (void)>::operatorcast(void) const ",
         );
         expect_failure(
             "??B?$function@$$A6AXXZ@std@@QBE_NXZ",
-            "public: __thiscall std::function<void __cdecl(void)>::operator bool(void)const",
+            "public: __thiscall std::function<void __cdecl(void)>::operator bool(void) const",
         );
         expect(
             "??$?RA6AXXZ$$V@SkOnce@@QAEXA6AXXZ@Z",
-            "public: void __thiscall SkOnce::operator()<void __cdecl (&)(void)>(void __cdecl (&)(void))",
+            "public: void __thiscall SkOnce::operator()<void (__cdecl &)(void)>(void (__cdecl &)(void))",
         );
         expect_failure(
             "??$?RA6AXXZ$$V@SkOnce@@QAEXA6AXXZ@Z",
@@ -2201,7 +2209,7 @@ mod tests {
         );
         expect(
             "?foo@A@PR19361@@QIHAEXXZ",
-            "public: void __thiscall PR19361::A::foo(void)__restrict && ",
+            "public: void __thiscall PR19361::A::foo(void) __restrict && ",
         );
         expect_failure(
             "?foo@A@PR19361@@QIHAEXXZ",
@@ -2643,14 +2651,14 @@ mod tests {
         expect("?x@@3PEAY1NKM@5HEA", "int (*x)[3500][6]");
         expect("?x@@YAXMH@Z", "void __cdecl x(float,int)");
         expect("?x@@YAXMH@Z", "void __cdecl x(float,int)");
-        expect("?x@@3P6AHMNH@ZEA", "int __cdecl (*x)(float,double,int)");
+        expect("?x@@3P6AHMNH@ZEA", "int (__cdecl *x)(float,double,int)");
         expect(
             "?x@@3P6AHP6AHM@ZN@ZEA",
-            "int __cdecl (*x)(int __cdecl (*)(float),double)",
+            "int (__cdecl *x)(int (__cdecl *)(float),double)",
         );
         expect(
             "?x@@3P6AHP6AHM@Z0@ZEA",
-            "int __cdecl (*x)(int __cdecl (*)(float),int __cdecl (*)(float))",
+            "int (__cdecl *x)(int (__cdecl *)(float),int (__cdecl *)(float))",
         );
 
         expect("?x@ns@@3HA", "int ns::x");
@@ -2676,7 +2684,7 @@ mod tests {
         expect("?instance@@3Vklass@@A", "class klass instance");
         expect(
             "?instance$initializer$@@3P6AXXZEA",
-            "void __cdecl (*instance$initializer$)(void)",
+            "void (__cdecl *instance$initializer$)(void)",
         );
         expect("??0klass@@QEAA@XZ", "public: __cdecl klass::klass(void)");
         expect("??1klass@@QEAA@XZ", "public: __cdecl klass::~klass(void)");
@@ -2690,7 +2698,7 @@ mod tests {
         );
         expect(
             "?fn@?$klass@H@ns@@QEBAIXZ",
-            "public: unsigned int __cdecl ns::klass<int>::fn(void)const ",
+            "public: unsigned int __cdecl ns::klass<int>::fn(void) const ",
         );
 
         expect(

@@ -6,7 +6,7 @@ use msvc_demangler::{demangle, DemangleFlags};
 #[derive(Debug)]
 pub struct TestCase<'a> {
     mangled: &'a str,
-    demangled: &'a str,
+    demangled_ref: &'a str,
     not_invalid: bool,
 }
 
@@ -55,7 +55,7 @@ fn parse_cases<'a, I: Iterator<Item=&'a str>>(i: I) -> impl Iterator<Item=TestCa
                             LineRule::Check(check) => {
                                 return Some(TestCase {
                                     mangled: input,
-                                    demangled: check,
+                                    demangled_ref: check,
                                     not_invalid,
                                 });
                             }
@@ -79,7 +79,10 @@ macro_rules! llvm_test {
         for case in parse_cases(rules.lines()) {
             if case.not_invalid {
                 let demangled = demangle(case.mangled, DemangleFlags::llvm()).unwrap();
-                assert_eq!(demangled, case.demangled);
+                println!("      mangled: {}", case.mangled);
+                println!("demangled ref: {}", case.demangled_ref);
+                println!("    demangled: {}", &demangled);
+                assert!(demangled.contains(case.demangled_ref));
             }
         }
     }}
@@ -88,5 +91,4 @@ macro_rules! llvm_test {
 #[test]
 fn test_llvm_ms_basic() {
     llvm_test!("llvm-cases/ms-basic.test");
-    panic!();
 }
