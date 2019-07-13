@@ -320,6 +320,7 @@ pub enum Type<'a> {
     Int64(StorageClass),
     Uint64(StorageClass),
     Wchar(StorageClass),
+    Char8(StorageClass),
     Char16(StorageClass),
     Char32(StorageClass),
     Float(StorageClass),
@@ -1196,7 +1197,7 @@ impl<'a> ParserState<'a> {
                 b'J' => Type::Int64(sc),
                 b'K' => Type::Uint64(sc),
                 b'W' => Type::Wchar(sc),
-                b'Q' => Type::Char(sc),
+                b'Q' => Type::Char8(sc),
                 b'S' => Type::Char16(sc),
                 b'U' => Type::Char32(sc),
                 _ => {
@@ -1609,7 +1610,11 @@ impl<'a> Serializer<'a> {
                 sc
             }
             &Type::Int64(sc) => {
-                write!(self.w, "int64_t")?;
+                if self.flags.contains(DemangleFlags::MS_TYPENAMES) {
+                    write!(self.w, "__int64")?;
+                } else {
+                    write!(self.w, "int64_t")?;
+                }
                 sc
             }
             &Type::Uint64(sc) => {
@@ -1634,6 +1639,10 @@ impl<'a> Serializer<'a> {
             }
             &Type::Ldouble(sc) => {
                 write!(self.w, "long double")?;
+                sc
+            }
+            &Type::Char8(sc) => {
+                write!(self.w, "char8_t")?;
                 sc
             }
             &Type::Char16(sc) => {
