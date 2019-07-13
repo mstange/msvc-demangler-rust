@@ -119,6 +119,17 @@ bitflags! {
         const SPACE_AFTER_COMMA = 0x200000;
         /// Make * and & hug the type name.
         const HUG_TYPE = 0x400000;
+        /// Insert a space before pointers.
+        const SPACE_BEFORE_POINTER = 0x800000;
+    }
+}
+
+impl DemangleFlags {
+    pub fn llvm() -> DemangleFlags {
+        DemangleFlags::COMPLETE |
+        DemangleFlags::SPACE_AFTER_COMMA |
+        DemangleFlags::SPACE_BEFORE_POINTER |
+        DemangleFlags::HUG_TYPE
     }
 }
 
@@ -1309,7 +1320,7 @@ impl<'a> ParserState<'a> {
 }
 
 pub fn demangle<'a>(input: &'a str, flags: DemangleFlags) -> Result<String> {
-    serialize(&parse(input)?, flags)
+    serialize(&dbg!(parse(input)?), flags)
 }
 
 pub fn parse<'a>(input: &'a str) -> Result<ParseResult> {
@@ -1368,9 +1379,9 @@ impl<'a> Serializer<'a> {
     }
 
     fn write_calling_conv(&mut self, calling_conv: CallingConv) -> SerializeResult<()> {
-        if let Some(&b' ') = self.w.last() {
-        } else {
-            write!(self.w, " ")?;
+        match self.w.last() {
+            Some(b' ') | Some(b'(') => {}
+            _ => write!(self.w, " ")?,
         }
         if !self.flags.contains(DemangleFlags::NO_MS_KEYWORDS) {
             match calling_conv {
@@ -1477,38 +1488,51 @@ impl<'a> Serializer<'a> {
             &Type::Ptr(ref inner, storage_class)
             | &Type::Ref(ref inner, storage_class)
             | &Type::RValueRef(ref inner, storage_class) => {
-                self.write_pre(inner)?;
 
                 // "[]" and "()" (for function parameters) take precedence over "*",
                 // so "int *x(int)" means "x is a function returning int *". We need
                 // parentheses to supercede the default precedence. (e.g. we want to
                 // emit something like "int (*x)(int)".)
                 match inner.as_ref() {
-                    &Type::MemberFunction(_, _, _, _, _)
-                    | &Type::NonMemberFunction(_, _, _, _)
-                    | &Type::Array(_, _, _) => {
+                    &Type::MemberFunction(_, calling_conv, _, _, ref inner)
+                    | &Type::NonMemberFunction(calling_conv, _, _, ref inner) => {
+                        self.write_pre(inner)?;
+                        self.write_space()?;
+                        write!(self.w, "(")?;
+                        self.write_calling_conv(calling_conv)?;
+                    }
+                    &Type::Array(_, _, _) => {
+                        self.write_pre(inner)?;
                         self.write_space()?;
                         write!(self.w, "(")?;
                     }
-                    _ => {}
+                    _ => {
+                        self.write_pre(inner)?;
+                    }
                 }
 
                 match t {
                     &Type::Ptr(_, _) => {
                         if !self.flags.contains(DemangleFlags::HUG_TYPE) {
                             self.write_space()?;
+                        } else if self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
+                            self.write_space_ptr()?;
                         }
                         write!(self.w, "*")?
                     }
                     &Type::Ref(_, _) => {
                         if !self.flags.contains(DemangleFlags::HUG_TYPE) {
                             self.write_space()?;
+                        } else if self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
+                            self.write_space_ptr()?;
                         }
                         write!(self.w, "&")?
                     }
                     &Type::RValueRef(_, _) => {
                         if !self.flags.contains(DemangleFlags::HUG_TYPE) {
                             self.write_space()?;
+                        } else if self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
+                            self.write_space_ptr()?;
                         }
                         write!(self.w, "&&")?
                     }
@@ -1622,11 +1646,19 @@ impl<'a> Serializer<'a> {
         };
 
         if storage_class.contains(StorageClass::CONST) {
-            self.write_space()?;
+            if self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
+                self.write_space_ptr()?;
+            } else {
+                self.write_space()?;
+            }
             write!(self.w, "const")?;
         }
         if storage_class.contains(StorageClass::VOLATILE) {
-            self.write_space()?;
+            if self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
+                self.write_space_ptr()?;
+            } else {
+                self.write_space()?;
+            }
             write!(self.w, "volatile")?;
         }
 
@@ -1753,6 +1785,16 @@ impl<'a> Serializer<'a> {
         }
         Ok(())
     }
+
+    fn write_space_ptr(&mut self) -> SerializeResult<()> {
+        if let Some(&c) = self.w.last() {
+            if char::from(c).is_ascii_alphabetic() || c == b'>' {
+                write!(self.w, " ")?;
+            }
+        }
+        Ok(())
+    }
+
     fn write_space(&mut self) -> SerializeResult<()> {
         if let Some(&c) = self.w.last() {
             if char::from(c).is_ascii_alphabetic() || c == b'*' || c == b'&' || c == b'>' {
@@ -1899,7 +1941,11 @@ impl<'a> Serializer<'a> {
 
     // Write a name read by read_name().
     fn write_name(&mut self, names: &Symbol) -> SerializeResult<()> {
-        self.write_space_pre()?;
+        if !self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
+            self.write_space_pre()?;
+        } else {
+            self.write_space_ptr()?;
+        }
 
         self.write_scope(&names.scope)?;
 
