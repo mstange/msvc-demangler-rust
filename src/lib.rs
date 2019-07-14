@@ -261,6 +261,11 @@ pub enum Operator<'a> {
     RTTIBaseClassDescriptor(i32, i32, i32, i32),
     RTTIBaseClassArray,
     RTTIClassHierarchyDescriptor,
+    RTTIClassCompleteObjectLocator,
+
+    DynamicInitializer,
+    DynamicAtexitDtor,
+    LocalStaticThreadGuard,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -851,7 +856,7 @@ impl<'a> ParserState<'a> {
             b'8' => Operator::EqualEqual,
             b'9' => Operator::BangEqual,
             b'A' => Operator::Subscript,
-            b'B' => Operator::Conversion, // TODO
+            b'B' => Operator::Conversion,
             b'C' => Operator::Arrow,
             b'D' => Operator::Star,
             b'E' => Operator::PlusPlus,
@@ -925,6 +930,7 @@ impl<'a> ParserState<'a> {
                         }
                         b'2' => Operator::RTTIBaseClassArray,
                         b'3' => Operator::RTTIClassHierarchyDescriptor,
+                        b'4' => Operator::RTTIClassCompleteObjectLocator,
                         _ => {
                             return Err(Error::new(format!(
                                 "unknown RTTI Operator name: {}",
@@ -942,6 +948,12 @@ impl<'a> ParserState<'a> {
                 b'_' => {
                     if self.consume(b"L") {
                         Operator::CoroutineAwait
+                    } else if self.consume(b"E") {
+                        Operator::DynamicInitializer
+                    } else if self.consume(b"F") {
+                        Operator::DynamicAtexitDtor
+                    } else if self.consume(b"J") {
+                        Operator::LocalStaticThreadGuard
                     } else if self.consume(b"K") {
                         Operator::LiteralOperatorName // TODO: read <source-name>, that's the operator name
                     } else {
@@ -981,7 +993,9 @@ impl<'a> ParserState<'a> {
             b'D' => FuncClass::PRIVATE | FuncClass::STATIC,
             b'E' => FuncClass::PRIVATE | FuncClass::VIRTUAL,
             b'F' => FuncClass::PRIVATE | FuncClass::VIRTUAL,
+            // TODO(mitsuhiko): llvm uses adjustor here instead of virtual
             b'G' => read_thunk(FuncClass::PRIVATE | FuncClass::VIRTUAL)?,
+            // TODO(mitsuhiko): llvm uses adjustor here instead of virtual
             b'H' => read_thunk(FuncClass::PRIVATE | FuncClass::VIRTUAL | FuncClass::FAR)?,
             b'I' => FuncClass::PROTECTED,
             b'J' => FuncClass::PROTECTED | FuncClass::FAR,
@@ -989,7 +1003,9 @@ impl<'a> ParserState<'a> {
             b'L' => FuncClass::PROTECTED | FuncClass::STATIC | FuncClass::FAR,
             b'M' => FuncClass::PROTECTED | FuncClass::VIRTUAL,
             b'N' => FuncClass::PROTECTED | FuncClass::VIRTUAL | FuncClass::FAR,
+            // TODO(mitsuhiko): llvm uses adjustor here instead of virtual
             b'O' => read_thunk(FuncClass::PROTECTED | FuncClass::VIRTUAL)?,
+            // TODO(mitsuhiko): llvm uses adjustor here instead of virtual
             b'P' => read_thunk(FuncClass::PROTECTED | FuncClass::VIRTUAL | FuncClass::FAR)?,
             b'Q' => FuncClass::PUBLIC,
             b'R' => FuncClass::PUBLIC | FuncClass::FAR,
@@ -997,7 +1013,9 @@ impl<'a> ParserState<'a> {
             b'T' => FuncClass::PUBLIC | FuncClass::STATIC | FuncClass::FAR,
             b'U' => FuncClass::PUBLIC | FuncClass::VIRTUAL,
             b'V' => FuncClass::PUBLIC | FuncClass::VIRTUAL | FuncClass::FAR,
+            // TODO(mitsuhiko): llvm uses adjustor here instead of virtual
             b'W' => read_thunk(FuncClass::PUBLIC | FuncClass::VIRTUAL)?,
+            // TODO(mitsuhiko): llvm uses adjustor here instead of virtual
             b'X' => read_thunk(FuncClass::PUBLIC | FuncClass::VIRTUAL | FuncClass::FAR)?,
             b'Y' => FuncClass::GLOBAL,
             b'Z' => FuncClass::GLOBAL | FuncClass::FAR,
@@ -1402,7 +1420,7 @@ impl<'a> Serializer<'a> {
         {
             self.write_pre(&parse_result.symbol_type)?;
         }
-        self.write_name(&parse_result.symbol)?;
+        self.write_name(&parse_result.symbol, Some(&parse_result.symbol_type))?;
         if !self.flags.contains(DemangleFlags::NAME_ONLY) {
             self.write_post(&parse_result.symbol_type)?;
         }
@@ -1444,7 +1462,7 @@ impl<'a> Serializer<'a> {
             &Type::None => return Ok(()),
             &Type::MemberFunction(func_class, calling_conv, _, _, ref inner) => {
                 if func_class.contains(FuncClass::THUNK) {
-                    write!(self.w, "[thunk]:")?
+                    write!(self.w, "[thunk]: ")?
                 }
                 if !self.flags.contains(DemangleFlags::NO_ACCESS_SPECIFIERS) {
                     if func_class.contains(FuncClass::PRIVATE) {
@@ -1475,7 +1493,7 @@ impl<'a> Serializer<'a> {
                 self.write_space()?;
                 write!(self.w, "(")?;
                 self.write_space()?;
-                self.write_name(symbol)?;
+                self.write_name(symbol, None)?;
                 write!(self.w, "::*)")?;
                 return Ok(());
             }
@@ -1792,17 +1810,17 @@ impl<'a> Serializer<'a> {
             }
             &Type::CXXVFTable(ref names, _) => {
                 if !names.names.is_empty() {
-                    write!(self.w, "{{for ")?;
-                    for name in &names.names {
-                        write!(self.w, "`")?;
-                        self.write_one_name(name)?;
-                        write!(self.w, "'")?;
-                    }
-                    self.w.write(b"}")?;
+                    write!(self.w, "{{for `")?;
+                    self.write_scope(names)?;
+                    self.w.write(b"'}")?;
                 }
             }
             &Type::VCallThunk(offset, _) => {
-                write!(self.w, "{{{},{{flat}}}}' }}", offset)?;
+                write!(self.w, "{{{},", offset)?;
+                if self.flags.contains(DemangleFlags::SPACE_AFTER_COMMA) {
+                    write!(self.w, " ")?;
+                }
+                write!(self.w, "{{flat}}}}")?;
             }
             _ => {}
         }
@@ -1829,7 +1847,7 @@ impl<'a> Serializer<'a> {
             write!(self.w, "{}", s)?;
             write!(self.w, " ")?;
         }
-        self.write_name(names)?;
+        self.write_name(names, None)?;
         Ok(())
     }
 
@@ -1873,6 +1891,8 @@ impl<'a> Serializer<'a> {
             &Operator::EqualEqual => "operator==",
             &Operator::BangEqual => "operator!=",
             &Operator::Subscript => "operator[]",
+            // this is special cased for most situations unless demangling
+            // produced something really wacky
             &Operator::Conversion => "operatorcast",
             &Operator::Arrow => "operator->",
             &Operator::Star => "operator*",
@@ -1919,11 +1939,11 @@ impl<'a> Serializer<'a> {
             &Operator::VectorCtorIterator => "`vector constructor iterator'",
             &Operator::VectorDtorIterator => "`vector destructor iterator'",
             &Operator::VectorVBaseCtorIterator => "`vector vbase constructor iterator'",
-            &Operator::VirtualDisplacementMap => "`virual displacement map'",
+            &Operator::VirtualDisplacementMap => "`virtual displacement map'",
             &Operator::EHVectorCtorIterator => "`eh vector constructor iterator'",
             &Operator::EHVectorDtorIterator => "`eh vector destructor iterator'",
             &Operator::EHVectorVBaseCtorIterator => "`eh vector vbase constructor iterator'",
-            &Operator::CopyCtorClosure => "`copy constructor closure",
+            &Operator::CopyCtorClosure => "`copy constructor closure'",
 
             &Operator::LocalVFTable => "`local vftable'",
             &Operator::LocalVFTableCtorClosure => "`local vftable constructor closure'",
@@ -1933,23 +1953,31 @@ impl<'a> Serializer<'a> {
             &Operator::PlacementArrayDeleteClosure => "`placement delete[] closure'",
 
             &Operator::CoroutineAwait => " co_await",
-            &Operator::LiteralOperatorName => " CXXLiteralOperatorName",
+            &Operator::LiteralOperatorName => "operator \"\"",
 
             &Operator::RTTITypeDescriptor(_, ref inner) => {
                 self.write_pre(inner)?;
+                // XXX(mitsuhiko): llvm uses a space here instead of `::`.  No
+                // idea why, seems inconsistent
                 write!(self.w, "::`RTTI Type Descriptor'")?;
                 return Ok(());
             }
             &Operator::RTTIBaseClassDescriptor(nv_offset, vbptr_offset, vbtable_offset, flags) => {
+                let sp = if self.flags.contains(DemangleFlags::SPACE_AFTER_COMMA) { " " } else { "" };
                 write!(
                     self.w,
-                    "`RTTI Base Class Descriptor at ({},{},{},{})'",
-                    nv_offset, vbptr_offset, vbtable_offset, flags
+                    "`RTTI Base Class Descriptor at ({},{}{},{}{},{}{})'",
+                    nv_offset, sp, vbptr_offset, sp, vbtable_offset, sp, flags
                 )?;
                 return Ok(());
             }
             &Operator::RTTIBaseClassArray => "`RTTI Base Class Array'",
             &Operator::RTTIClassHierarchyDescriptor => "`RTTI Class Hierarchy Descriptor'",
+            &Operator::RTTIClassCompleteObjectLocator => "`RTTI Complete Object Locator'",
+
+            &Operator::DynamicInitializer => "`dynamic initializer'",
+            &Operator::DynamicAtexitDtor => "`dynamic atexit destructor'",
+            &Operator::LocalStaticThreadGuard => "`local static thread guard'",
         };
         write!(self.w, "{}", s)?;
         Ok(())
@@ -1996,16 +2024,23 @@ impl<'a> Serializer<'a> {
     }
 
     // Write a name read by read_name().
-    fn write_name(&mut self, names: &Symbol) -> SerializeResult<()> {
+    fn write_name(&mut self, names: &Symbol, ty: Option<&Type<'_>>) -> SerializeResult<()> {
         if !self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
             self.write_space_pre()?;
         } else {
             self.write_space_ptr()?;
         }
 
+        let mut was_literal_op = false;
+        if let Name::Operator(Operator::LiteralOperatorName) = names.name {
+            self.write_space()?;
+            self.write_operator_name(&Operator::LiteralOperatorName)?;
+            was_literal_op = true;
+        }
+
         self.write_scope(&names.scope)?;
 
-        if !names.scope.names.is_empty() {
+        if !names.scope.names.is_empty() && !was_literal_op {
             write!(self.w, "::")?;
         }
 
@@ -2030,6 +2065,17 @@ impl<'a> Serializer<'a> {
                         // The rest will be written by write_post of the
                         // symbol type.
                     }
+                    &Operator::Conversion => {
+                        if let Some(Type::MemberFunction(_, _, _, _, ref rv)) = ty {
+                            write!(self.w, "operator ")?;
+                            self.write_pre(rv)?;
+                            self.write_post(rv)?;
+                        } else {
+                            self.write_space()?;
+                            self.write_operator_name(op)?;
+                        }
+                    }
+                    &Operator::LiteralOperatorName => {}
                     _ => {
                         self.write_space()?;
                         // Print out an overloaded operator.
@@ -2216,7 +2262,7 @@ mod tests {
         /* XXX: undname tacks on `adjustor{16}` to the name. */
         expect(
             "?Release@ContentSignatureVerifier@@WBA@AGKXZ",
-            "[thunk]:public: virtual unsigned long __stdcall ContentSignatureVerifier::Release(void)",
+            "[thunk]: public: virtual unsigned long __stdcall ContentSignatureVerifier::Release(void)",
         );
         expect(
             "??$new_@VWatchpointMap@js@@$$V@?$MallocProvider@UZone@JS@@@js@@QAEPAVWatchpointMap@1@XZ",
@@ -2238,10 +2284,9 @@ mod tests {
             "??1?$function@$$A6AXXZ@std@@QAE@XZ",
             "public: __thiscall std::function<void __cdecl(void)>::~function<void __cdecl(void)>(void)",
         );
-        // Not great (`operatorcast`, space at the end), but at least make sure we don't regress.
         expect(
             "??B?$function@$$A6AXXZ@std@@QBE_NXZ",
-            "public: bool __thiscall std::function<void __cdecl (void)>::operatorcast(void) const",
+            "public: bool __thiscall std::function<void __cdecl (void)>::operator bool(void) const",
         );
         expect_failure(
             "??B?$function@$$A6AXXZ@std@@QBE_NXZ",
@@ -2281,7 +2326,7 @@ mod tests {
         );
         expect(
             "??_9nsDocument@@$BDMI@AE",
-            "[thunk]: __thiscall nsDocument::`vcall'{968,{flat}}' }",
+            "[thunk]: __thiscall nsDocument::`vcall'{968,{flat}}",
         );
         expect(
             "??_R0?AUCollationCacheEntry@icu_61@@@8",

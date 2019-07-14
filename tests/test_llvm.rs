@@ -83,7 +83,12 @@ macro_rules! llvm_test {
                 println!("      mangled: {}", case.mangled);
                 println!("demangled ref: {}", case.demangled_ref);
                 println!("    demangled: {}", &demangled);
-                assert!(demangled.contains(case.demangled_ref));
+                // llvm is inconsistent with ctor vs constructor in a few cases
+                let demangled_fuzzy = demangled
+                    .replace("constructor", "ctor")
+                    .replace("destructor", "dtor")
+                    .replace("::`RTTI", " `RTTI");
+                assert!(demangled_fuzzy.contains(case.demangled_ref) || demangled.contains(case.demangled_ref));
             } else {
                 panic!("not implemented");
             }
@@ -95,4 +100,9 @@ macro_rules! llvm_test {
 #[test]
 fn test_llvm_ms_basic() {
     llvm_test!("llvm-cases/ms-basic.test");
+}
+
+#[test]
+fn test_llvm_ms_operators() {
+    llvm_test!("llvm-cases/ms-operators.test");
 }
