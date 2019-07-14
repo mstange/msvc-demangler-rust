@@ -28,3 +28,9 @@ test: test-cargo test-wasm-build
 lint:
 	@rustup component add clippy --toolchain stable 2> /dev/null
 	@cargo +stable clippy --all --tests -- -D clippy::all
+.PHONY: lint
+
+update-readme:
+	@cargo-readme -V &> /dev/null || cargo install cargo-readme
+	@cargo readme > README.md
+.PHONY: update-readme

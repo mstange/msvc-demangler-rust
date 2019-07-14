@@ -7,9 +7,11 @@ license = "MIT/NCSA"
 documentation = "https://docs.rs/msvc-demangler/"
 description = "A rust library that demangles / undecorates C++ symbols mangled by MSVC"
 repository = "https://github.com/mstange/msvc-demangler-rust"
+readme = "README.md"
 
 [dependencies]
 bitflags = "1.0.1"
 
 [[bin]]
 name = "undname"
+path = "src/bin/undname.rs"
