@@ -379,15 +379,16 @@ impl<'a> ParserState<'a> {
 
         if self.consume(b"$") {
             if self.consume(b"TSS") {
-                let mut guard_num: i32 =
+                let mut guard_num: i32 = i32::from(
                     self.consume_digit()
-                        .ok_or(Error::new("missing digit".to_owned()))? as i32;
+                        .ok_or_else(|| Error::new("missing digit".to_owned()))?,
+                );
                 while !self.consume(b"@") {
                     guard_num = guard_num * 10
-                        + self
-                            .consume_digit()
-                            .ok_or(Error::new("missing digit".to_owned()))?
-                            as i32;
+                        + i32::from(
+                            self.consume_digit()
+                                .ok_or_else(|| Error::new("missing digit".to_owned()))?,
+                        );
                 }
                 let name = self.read_nested_name()?;
                 let scope = self.read_scope()?;
@@ -476,9 +477,8 @@ impl<'a> ParserState<'a> {
                 c => {
                     // Read a member function.
                     let func_class = self.read_func_class(c)?;
-                    let access_class;
-                    if func_class.contains(FuncClass::STATIC) {
-                        access_class = StorageClass::empty();
+                    let access_class = if func_class.contains(FuncClass::STATIC) {
+                        StorageClass::empty()
                     } else {
                         let _is_64bit_ptr = self.expect(b"E");
                         let restrict = if self.consume(b"I") {
@@ -497,8 +497,8 @@ impl<'a> ParserState<'a> {
                             }
                             _ => StorageClass::empty(),
                         };
-                        access_class = self.read_qualifier() | restrict | ref_qualifiers;
-                    }
+                        self.read_qualifier() | restrict | ref_qualifiers
+                    };
 
                     let calling_conv = self.read_calling_conv()?;
                     let storage_class_for_return = self.read_storage_class_for_return()?;
@@ -654,7 +654,7 @@ impl<'a> ParserState<'a> {
 
         if let Some(digit) = self.consume_digit() {
             let ret = digit + 1;
-            return Ok(if neg { -(ret as i32) } else { ret as i32 });
+            return Ok(if neg { -i32::from(ret) } else { i32::from(ret) });
         }
 
         let orig = self.input;
@@ -667,7 +667,7 @@ impl<'a> ParserState<'a> {
                     return Ok(if neg { -(ret as i32) } else { ret as i32 });
                 }
                 b'A'...b'P' => {
-                    ret = (ret << 4) + ((c - b'A') as i32);
+                    ret = (ret << 4) + i32::from(c - b'A');
                     i += 1;
                 }
                 _ => {
@@ -1367,11 +1367,11 @@ impl<'a> ParserState<'a> {
     }
 }
 
-pub fn demangle<'a>(input: &'a str, flags: DemangleFlags) -> Result<String> {
+pub fn demangle(input: &str, flags: DemangleFlags) -> Result<String> {
     serialize(&parse(input)?, flags)
 }
 
-pub fn parse<'a>(input: &'a str) -> Result<ParseResult> {
+pub fn parse(input: &str) -> Result<ParseResult> {
     let mut state = ParserState {
         input: input.as_bytes(),
         memorized_names: Vec::with_capacity(10),
@@ -1457,9 +1457,9 @@ impl<'a> Serializer<'a> {
 
     // Write the "first half" of a given type.
     fn write_pre(&mut self, t: &Type) -> SerializeResult<()> {
-        let storage_class = match t {
-            &Type::None => return Ok(()),
-            &Type::MemberFunction(func_class, calling_conv, _, _, ref inner) => {
+        let storage_class = match *t {
+            Type::None => return Ok(()),
+            Type::MemberFunction(func_class, calling_conv, _, _, ref inner) => {
                 if func_class.contains(FuncClass::THUNK) {
                     write!(self.w, "[thunk]: ")?
                 }
@@ -1486,7 +1486,7 @@ impl<'a> Serializer<'a> {
                 self.write_calling_conv(calling_conv)?;
                 return Ok(());
             }
-            &Type::MemberFunctionPointer(ref symbol, _, calling_conv, _, _, ref inner) => {
+            Type::MemberFunctionPointer(ref symbol, _, calling_conv, _, _, ref inner) => {
                 self.write_pre(inner)?;
                 self.write_calling_conv(calling_conv)?;
                 self.write_space()?;
@@ -1496,31 +1496,31 @@ impl<'a> Serializer<'a> {
                 write!(self.w, "::*)")?;
                 return Ok(());
             }
-            &Type::NonMemberFunction(calling_conv, _, _, ref inner) => {
+            Type::NonMemberFunction(calling_conv, _, _, ref inner) => {
                 self.write_pre(inner)?;
                 self.write_calling_conv(calling_conv)?;
                 return Ok(());
             }
-            &Type::VCallThunk(_, calling_conv) => {
+            Type::VCallThunk(_, calling_conv) => {
                 write!(self.w, "[thunk]: ")?;
                 self.write_calling_conv(calling_conv)?;
                 return Ok(());
             }
-            &Type::CXXVBTable(_, sc) => sc,
-            &Type::CXXVFTable(_, sc) => sc,
-            &Type::TemplateParameterWithIndex(n) => {
+            Type::CXXVBTable(_, sc) => sc,
+            Type::CXXVFTable(_, sc) => sc,
+            Type::TemplateParameterWithIndex(n) => {
                 write!(self.w, "`template-parameter{}'", n)?;
                 return Ok(());
             }
-            &Type::ThreadSafeStaticGuard(num) => {
+            Type::ThreadSafeStaticGuard(num) => {
                 write!(self.w, "TSS{}", num)?;
                 return Ok(());
             }
-            &Type::Constant(n) => {
+            Type::Constant(n) => {
                 write!(self.w, "{}", n)?;
                 return Ok(());
             }
-            &Type::ConstantString(_) => {
+            Type::ConstantString(_) => {
                 // We have no idea what the original encoding of the string is,
                 // and undname doesn't even try to display anything.
                 //match str::from_utf8(s).ok() {
@@ -1529,26 +1529,26 @@ impl<'a> Serializer<'a> {
                 //}
                 return Ok(());
             }
-            &Type::VarArgs => {
+            Type::VarArgs => {
                 write!(self.w, "...")?;
                 return Ok(());
             }
-            &Type::Ptr(ref inner, storage_class)
-            | &Type::Ref(ref inner, storage_class)
-            | &Type::RValueRef(ref inner, storage_class) => {
+            Type::Ptr(ref inner, storage_class)
+            | Type::Ref(ref inner, storage_class)
+            | Type::RValueRef(ref inner, storage_class) => {
                 // "[]" and "()" (for function parameters) take precedence over "*",
                 // so "int *x(int)" means "x is a function returning int *". We need
                 // parentheses to supercede the default precedence. (e.g. we want to
                 // emit something like "int (*x)(int)".)
-                match inner.as_ref() {
-                    &Type::MemberFunction(_, calling_conv, _, _, ref inner)
-                    | &Type::NonMemberFunction(calling_conv, _, _, ref inner) => {
+                match *inner.as_ref() {
+                    Type::MemberFunction(_, calling_conv, _, _, ref inner)
+                    | Type::NonMemberFunction(calling_conv, _, _, ref inner) => {
                         self.write_pre(inner)?;
                         self.write_space()?;
                         write!(self.w, "(")?;
                         self.write_calling_conv(calling_conv)?;
                     }
-                    &Type::Array(_, _, _) => {
+                    Type::Array(_, _, _) => {
                         self.write_pre(inner)?;
                         self.write_space()?;
                         write!(self.w, "(")?;
@@ -1558,8 +1558,8 @@ impl<'a> Serializer<'a> {
                     }
                 }
 
-                match t {
-                    &Type::Ptr(_, _) => {
+                match *t {
+                    Type::Ptr(_, _) => {
                         if !self.flags.contains(DemangleFlags::HUG_TYPE) {
                             self.write_space()?;
                         } else if self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
@@ -1567,7 +1567,7 @@ impl<'a> Serializer<'a> {
                         }
                         write!(self.w, "*")?
                     }
-                    &Type::Ref(_, _) => {
+                    Type::Ref(_, _) => {
                         if !self.flags.contains(DemangleFlags::HUG_TYPE) {
                             self.write_space()?;
                         } else if self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
@@ -1575,7 +1575,7 @@ impl<'a> Serializer<'a> {
                         }
                         write!(self.w, "&")?
                     }
-                    &Type::RValueRef(_, _) => {
+                    Type::RValueRef(_, _) => {
                         if !self.flags.contains(DemangleFlags::HUG_TYPE) {
                             self.write_space()?;
                         } else if self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
@@ -1588,11 +1588,11 @@ impl<'a> Serializer<'a> {
 
                 storage_class
             }
-            &Type::Array(_len, ref inner, storage_class) => {
+            Type::Array(_len, ref inner, storage_class) => {
                 self.write_pre(inner)?;
                 storage_class
             }
-            &Type::Var(ref inner, kind, sc) => {
+            Type::Var(ref inner, kind, sc) => {
                 match kind {
                     VarStorageKind::PrivateStatic => write!(self.w, "private: static ")?,
                     VarStorageKind::ProtectedStatic => write!(self.w, "protected: static ")?,
@@ -1604,67 +1604,67 @@ impl<'a> Serializer<'a> {
                 self.write_pre(inner)?;
                 sc
             }
-            &Type::Struct(ref names, sc) => {
+            Type::Struct(ref names, sc) => {
                 self.write_class(names, "struct")?;
                 sc
             }
-            &Type::Union(ref names, sc) => {
+            Type::Union(ref names, sc) => {
                 self.write_class(names, "union")?;
                 sc
             }
-            &Type::Class(ref names, sc) => {
+            Type::Class(ref names, sc) => {
                 self.write_class(names, "class")?;
                 sc
             }
-            &Type::Enum(ref names, sc) => {
+            Type::Enum(ref names, sc) => {
                 self.write_class(names, "enum")?;
                 sc
             }
-            &Type::Void(sc) => {
+            Type::Void(sc) => {
                 write!(self.w, "void")?;
                 sc
             }
-            &Type::Bool(sc) => {
+            Type::Bool(sc) => {
                 write!(self.w, "bool")?;
                 sc
             }
-            &Type::Char(sc) => {
+            Type::Char(sc) => {
                 write!(self.w, "char")?;
                 sc
             }
-            &Type::Schar(sc) => {
+            Type::Schar(sc) => {
                 write!(self.w, "signed char")?;
                 sc
             }
-            &Type::Uchar(sc) => {
+            Type::Uchar(sc) => {
                 write!(self.w, "unsigned char")?;
                 sc
             }
-            &Type::Short(sc) => {
+            Type::Short(sc) => {
                 write!(self.w, "short")?;
                 sc
             }
-            &Type::Ushort(sc) => {
+            Type::Ushort(sc) => {
                 write!(self.w, "unsigned short")?;
                 sc
             }
-            &Type::Int(sc) => {
+            Type::Int(sc) => {
                 write!(self.w, "int")?;
                 sc
             }
-            &Type::Uint(sc) => {
+            Type::Uint(sc) => {
                 write!(self.w, "unsigned int")?;
                 sc
             }
-            &Type::Long(sc) => {
+            Type::Long(sc) => {
                 write!(self.w, "long")?;
                 sc
             }
-            &Type::Ulong(sc) => {
+            Type::Ulong(sc) => {
                 write!(self.w, "unsigned long")?;
                 sc
             }
-            &Type::Int64(sc) => {
+            Type::Int64(sc) => {
                 if self.flags.contains(DemangleFlags::MS_TYPENAMES) {
                     write!(self.w, "__int64")?;
                 } else {
@@ -1672,7 +1672,7 @@ impl<'a> Serializer<'a> {
                 }
                 sc
             }
-            &Type::Uint64(sc) => {
+            Type::Uint64(sc) => {
                 if self.flags.contains(DemangleFlags::MS_TYPENAMES) {
                     write!(self.w, "unsigned __int64")?;
                 } else {
@@ -1680,40 +1680,40 @@ impl<'a> Serializer<'a> {
                 }
                 sc
             }
-            &Type::Wchar(sc) => {
+            Type::Wchar(sc) => {
                 write!(self.w, "wchar_t")?;
                 sc
             }
-            &Type::Float(sc) => {
+            Type::Float(sc) => {
                 write!(self.w, "float")?;
                 sc
             }
-            &Type::Double(sc) => {
+            Type::Double(sc) => {
                 write!(self.w, "double")?;
                 sc
             }
-            &Type::Ldouble(sc) => {
+            Type::Ldouble(sc) => {
                 write!(self.w, "long double")?;
                 sc
             }
-            &Type::Char8(sc) => {
+            Type::Char8(sc) => {
                 write!(self.w, "char8_t")?;
                 sc
             }
-            &Type::Char16(sc) => {
+            Type::Char16(sc) => {
                 write!(self.w, "char16_t")?;
                 sc
             }
-            &Type::Char32(sc) => {
+            Type::Char32(sc) => {
                 write!(self.w, "char32_t")?;
                 sc
             }
-            &Type::Nullptr => {
+            Type::Nullptr => {
                 write!(self.w, "std::nullptr_t")?;
                 return Ok(());
             }
-            &Type::EmptyParameterPack => return Ok(()),
-            &Type::RTTIType => return Ok(()),
+            Type::EmptyParameterPack => return Ok(()),
+            Type::RTTIType => return Ok(()),
         };
 
         if storage_class.contains(StorageClass::CONST) {
@@ -1745,7 +1745,7 @@ impl<'a> Serializer<'a> {
         let mut write_one_qual = |flag, s| -> SerializeResult<()> {
             if sc.contains(flag) {
                 self.write_space()?;
-                self.w.write(s)?;
+                self.w.write_all(s)?;
             }
 
             Ok(())
@@ -1763,9 +1763,9 @@ impl<'a> Serializer<'a> {
 
     // Write the "second half" of a given type.
     fn write_post(&mut self, t: &Type) -> SerializeResult<()> {
-        match t {
-            &Type::MemberFunction(_, _, ref params, sc, ref return_type)
-            | &Type::NonMemberFunction(_, ref params, sc, ref return_type) => {
+        match *t {
+            Type::MemberFunction(_, _, ref params, sc, ref return_type)
+            | Type::NonMemberFunction(_, ref params, sc, ref return_type) => {
                 write!(self.w, "(")?;
                 self.write_types(&params.types)?;
                 write!(self.w, ")")?;
@@ -1774,7 +1774,7 @@ impl<'a> Serializer<'a> {
 
                 self.write_memfn_qualifiers(sc)?;
             }
-            &Type::MemberFunctionPointer(_, _, _, ref params, sc, ref return_type) => {
+            Type::MemberFunctionPointer(_, _, _, ref params, sc, ref return_type) => {
                 write!(self.w, "(")?;
                 self.write_types(&params.types)?;
                 write!(self.w, ")")?;
@@ -1786,36 +1786,36 @@ impl<'a> Serializer<'a> {
                     self.write_space()?;
                 }
             }
-            &Type::CXXVBTable(ref names, _sc) => {
+            Type::CXXVBTable(ref names, _sc) => {
                 self.write_scope(names)?;
                 write!(self.w, "\'}}")?; // the rest of the "operator"
             }
-            &Type::Ptr(ref inner, _sc) | &Type::Ref(ref inner, _sc) => {
-                match inner.as_ref() {
-                    &Type::MemberFunction(_, _, _, _, _)
-                    | &Type::NonMemberFunction(_, _, _, _)
-                    | &Type::Array(_, _, _) => {
+            Type::Ptr(ref inner, _sc) | Type::Ref(ref inner, _sc) => {
+                match *inner.as_ref() {
+                    Type::MemberFunction(_, _, _, _, _)
+                    | Type::NonMemberFunction(_, _, _, _)
+                    | Type::Array(_, _, _) => {
                         write!(self.w, ")")?;
                     }
                     _ => {}
                 }
                 self.write_post(inner)?;
             }
-            &Type::Array(len, ref inner, _sc) => {
+            Type::Array(len, ref inner, _sc) => {
                 write!(self.w, "[{}]", len)?;
                 self.write_post(inner)?;
             }
-            &Type::Var(ref inner, _kind, _sc) => {
+            Type::Var(ref inner, _kind, _sc) => {
                 self.write_post(inner)?;
             }
-            &Type::CXXVFTable(ref names, _) => {
+            Type::CXXVFTable(ref names, _) => {
                 if !names.names.is_empty() {
                     write!(self.w, "{{for `")?;
                     self.write_scope(names)?;
-                    self.w.write(b"'}")?;
+                    self.w.write_all(b"'}")?;
                 }
             }
-            &Type::VCallThunk(offset, _) => {
+            Type::VCallThunk(offset, _) => {
                 write!(self.w, "{{{},", offset)?;
                 if self.flags.contains(DemangleFlags::SPACE_AFTER_COMMA) {
                     write!(self.w, " ")?;
@@ -1888,90 +1888,91 @@ impl<'a> Serializer<'a> {
     }
 
     fn write_operator_name(&mut self, op: &Operator) -> SerializeResult<()> {
-        let s = match op {
-            &Operator::Ctor => "ctor",
-            &Operator::Dtor => "dtor",
-            &Operator::New => "operator new",
-            &Operator::Delete => "operator delete",
-            &Operator::Equal => "operator=",
-            &Operator::RShift => "operator>>",
-            &Operator::LShift => "operator<<",
-            &Operator::Bang => "operator!",
-            &Operator::EqualEqual => "operator==",
-            &Operator::BangEqual => "operator!=",
-            &Operator::Subscript => "operator[]",
+        let s = match *op {
+            Operator::Ctor => "ctor",
+            Operator::Dtor => "dtor",
+            Operator::New => "operator new",
+            Operator::Delete => "operator delete",
+            Operator::Equal => "operator=",
+            Operator::RShift => "operator>>",
+            Operator::LShift => "operator<<",
+            Operator::Bang => "operator!",
+            Operator::EqualEqual => "operator==",
+            Operator::BangEqual => "operator!=",
+            Operator::Subscript => "operator[]",
+
             // this is special cased for most situations unless demangling
             // produced something really wacky
-            &Operator::Conversion => "operatorcast",
-            &Operator::Arrow => "operator->",
-            &Operator::Star => "operator*",
-            &Operator::PlusPlus => "operator++",
-            &Operator::MinusMinus => "operator--",
-            &Operator::Minus => "operator-",
-            &Operator::Plus => "operator+",
-            &Operator::Amp => "operator&",
-            &Operator::ArrowStar => "operator->*",
-            &Operator::Slash => "operator/",
-            &Operator::Percent => "operator%",
-            &Operator::Less => "operator<",
-            &Operator::LessEqual => "operator<=",
-            &Operator::Greater => "operator>",
-            &Operator::GreaterEqual => "operator>=",
-            &Operator::Comma => "operator,",
-            &Operator::Call => "operator()",
-            &Operator::Tilde => "operator~",
-            &Operator::Caret => "operator^",
-            &Operator::Pipe => "operator|",
-            &Operator::AmpAmp => "operator&&",
-            &Operator::PipePipe => "operator||",
-            &Operator::StarEqual => "operator*=",
-            &Operator::PlusEqual => "operator+=",
-            &Operator::MinusEqual => "operator-=",
-            &Operator::SlashEqual => "operator/=",
-            &Operator::PercentEqual => "operator%=",
-            &Operator::GreaterGreaterEqual => "operator>>=",
-            &Operator::LessLessEqual => "operator<<=",
-            &Operator::AmpEqual => "operator&=",
-            &Operator::PipeEqual => "operator|=",
-            &Operator::CaretEqual => "operator^=",
+            Operator::Conversion => "operatorcast",
+            Operator::Arrow => "operator->",
+            Operator::Star => "operator*",
+            Operator::PlusPlus => "operator++",
+            Operator::MinusMinus => "operator--",
+            Operator::Minus => "operator-",
+            Operator::Plus => "operator+",
+            Operator::Amp => "operator&",
+            Operator::ArrowStar => "operator->*",
+            Operator::Slash => "operator/",
+            Operator::Percent => "operator%",
+            Operator::Less => "operator<",
+            Operator::LessEqual => "operator<=",
+            Operator::Greater => "operator>",
+            Operator::GreaterEqual => "operator>=",
+            Operator::Comma => "operator,",
+            Operator::Call => "operator()",
+            Operator::Tilde => "operator~",
+            Operator::Caret => "operator^",
+            Operator::Pipe => "operator|",
+            Operator::AmpAmp => "operator&&",
+            Operator::PipePipe => "operator||",
+            Operator::StarEqual => "operator*=",
+            Operator::PlusEqual => "operator+=",
+            Operator::MinusEqual => "operator-=",
+            Operator::SlashEqual => "operator/=",
+            Operator::PercentEqual => "operator%=",
+            Operator::GreaterGreaterEqual => "operator>>=",
+            Operator::LessLessEqual => "operator<<=",
+            Operator::AmpEqual => "operator&=",
+            Operator::PipeEqual => "operator|=",
+            Operator::CaretEqual => "operator^=",
 
-            &Operator::VFTable => "`vftable'",
-            &Operator::VBTable => "`vbtable'",
-            &Operator::VCall => "`vcall'",
-            &Operator::Typeof => "`typeof'",
-            &Operator::LocalStaticGuard => "`local static guard'",
-            &Operator::String => "`string'",
-            &Operator::VBaseDtor => "`vbase destructor'",
-            &Operator::VectorDeletingDtor => "`vector deleting destructor'",
-            &Operator::DefaultCtorClosure => "`default constructor closure'",
-            &Operator::ScalarDeletingDtor => "`scalar deleting destructor'",
-            &Operator::VectorCtorIterator => "`vector constructor iterator'",
-            &Operator::VectorDtorIterator => "`vector destructor iterator'",
-            &Operator::VectorVBaseCtorIterator => "`vector vbase constructor iterator'",
-            &Operator::VirtualDisplacementMap => "`virtual displacement map'",
-            &Operator::EHVectorCtorIterator => "`eh vector constructor iterator'",
-            &Operator::EHVectorDtorIterator => "`eh vector destructor iterator'",
-            &Operator::EHVectorVBaseCtorIterator => "`eh vector vbase constructor iterator'",
-            &Operator::CopyCtorClosure => "`copy constructor closure'",
+            Operator::VFTable => "`vftable'",
+            Operator::VBTable => "`vbtable'",
+            Operator::VCall => "`vcall'",
+            Operator::Typeof => "`typeof'",
+            Operator::LocalStaticGuard => "`local static guard'",
+            Operator::String => "`string'",
+            Operator::VBaseDtor => "`vbase destructor'",
+            Operator::VectorDeletingDtor => "`vector deleting destructor'",
+            Operator::DefaultCtorClosure => "`default constructor closure'",
+            Operator::ScalarDeletingDtor => "`scalar deleting destructor'",
+            Operator::VectorCtorIterator => "`vector constructor iterator'",
+            Operator::VectorDtorIterator => "`vector destructor iterator'",
+            Operator::VectorVBaseCtorIterator => "`vector vbase constructor iterator'",
+            Operator::VirtualDisplacementMap => "`virtual displacement map'",
+            Operator::EHVectorCtorIterator => "`eh vector constructor iterator'",
+            Operator::EHVectorDtorIterator => "`eh vector destructor iterator'",
+            Operator::EHVectorVBaseCtorIterator => "`eh vector vbase constructor iterator'",
+            Operator::CopyCtorClosure => "`copy constructor closure'",
 
-            &Operator::LocalVFTable => "`local vftable'",
-            &Operator::LocalVFTableCtorClosure => "`local vftable constructor closure'",
-            &Operator::ArrayNew => "operator new[]",
-            &Operator::ArrayDelete => "operator delete[]",
-            &Operator::PlacementDeleteClosure => "`placement delete closure'",
-            &Operator::PlacementArrayDeleteClosure => "`placement delete[] closure'",
+            Operator::LocalVFTable => "`local vftable'",
+            Operator::LocalVFTableCtorClosure => "`local vftable constructor closure'",
+            Operator::ArrayNew => "operator new[]",
+            Operator::ArrayDelete => "operator delete[]",
+            Operator::PlacementDeleteClosure => "`placement delete closure'",
+            Operator::PlacementArrayDeleteClosure => "`placement delete[] closure'",
 
-            &Operator::CoroutineAwait => " co_await",
-            &Operator::LiteralOperatorName => "operator \"\"",
+            Operator::CoroutineAwait => " co_await",
+            Operator::LiteralOperatorName => "operator \"\"",
 
-            &Operator::RTTITypeDescriptor(_, ref inner) => {
+            Operator::RTTITypeDescriptor(_, ref inner) => {
                 self.write_pre(inner)?;
                 // XXX(mitsuhiko): llvm uses a space here instead of `::`.  No
                 // idea why, seems inconsistent
                 write!(self.w, "::`RTTI Type Descriptor'")?;
                 return Ok(());
             }
-            &Operator::RTTIBaseClassDescriptor(nv_offset, vbptr_offset, vbtable_offset, flags) => {
+            Operator::RTTIBaseClassDescriptor(nv_offset, vbptr_offset, vbtable_offset, flags) => {
                 let sp = if self.flags.contains(DemangleFlags::SPACE_AFTER_COMMA) {
                     " "
                 } else {
@@ -1984,39 +1985,39 @@ impl<'a> Serializer<'a> {
                 )?;
                 return Ok(());
             }
-            &Operator::RTTIBaseClassArray => "`RTTI Base Class Array'",
-            &Operator::RTTIClassHierarchyDescriptor => "`RTTI Class Hierarchy Descriptor'",
-            &Operator::RTTIClassCompleteObjectLocator => "`RTTI Complete Object Locator'",
+            Operator::RTTIBaseClassArray => "`RTTI Base Class Array'",
+            Operator::RTTIClassHierarchyDescriptor => "`RTTI Class Hierarchy Descriptor'",
+            Operator::RTTIClassCompleteObjectLocator => "`RTTI Complete Object Locator'",
 
-            &Operator::DynamicInitializer => "`dynamic initializer'",
-            &Operator::DynamicAtexitDtor => "`dynamic atexit destructor'",
-            &Operator::LocalStaticThreadGuard => "`local static thread guard'",
+            Operator::DynamicInitializer => "`dynamic initializer'",
+            Operator::DynamicAtexitDtor => "`dynamic atexit destructor'",
+            Operator::LocalStaticThreadGuard => "`local static thread guard'",
         };
         write!(self.w, "{}", s)?;
         Ok(())
     }
 
     fn write_one_name(&mut self, name: &Name) -> SerializeResult<()> {
-        match name {
-            &Name::Operator(ref op) => {
+        match *name {
+            Name::Operator(ref op) => {
                 self.write_space()?;
                 self.write_operator_name(op)?;
                 //panic!("only the last name should be an operator");
             }
-            &Name::NonTemplate(ref name) => {
-                self.w.write(name)?;
+            Name::NonTemplate(ref name) => {
+                self.w.write_all(name)?;
             }
-            &Name::Template(ref name, ref params) => {
+            Name::Template(ref name, ref params) => {
                 self.write_one_name(name)?;
                 self.write_tmpl_params(&params)?;
             }
-            &Name::Discriminator(ref val) => {
+            Name::Discriminator(ref val) => {
                 write!(self.w, "`{}'", val)?;
             }
-            &Name::ParsedName(ref val) => {
+            Name::ParsedName(ref val) => {
                 write!(self.w, "`{}'", serialize(val, self.flags).unwrap())?;
             }
-            &Name::AnonymousNamespace => {
+            Name::AnonymousNamespace => {
                 write!(self.w, "`anonymous namespace'")?;
             }
         }
@@ -2057,28 +2058,28 @@ impl<'a> Serializer<'a> {
             write!(self.w, "::")?;
         }
 
-        match &names.name {
-            &Name::Operator(ref op) => {
-                match op {
-                    &Operator::Ctor => {
+        match names.name {
+            Name::Operator(ref op) => {
+                match *op {
+                    Operator::Ctor => {
                         let prev = names.scope.names.iter().next().expect(
                             "If there's a ctor, there should be another name in this sequence",
                         );
                         self.write_one_name(prev)?;
                     }
-                    &Operator::Dtor => {
+                    Operator::Dtor => {
                         let prev = names.scope.names.iter().next().expect(
                             "If there's a dtor, there should be another name in this sequence",
                         );
                         write!(self.w, "~")?;
                         self.write_one_name(prev)?;
                     }
-                    &Operator::VBTable => {
+                    Operator::VBTable => {
                         write!(self.w, "`vbtable'{{for `")?;
                         // The rest will be written by write_post of the
                         // symbol type.
                     }
-                    &Operator::Conversion => {
+                    Operator::Conversion => {
                         if let Some(Type::MemberFunction(_, _, _, _, ref rv)) = ty {
                             write!(self.w, "operator ")?;
                             self.write_pre(rv)?;
@@ -2088,7 +2089,7 @@ impl<'a> Serializer<'a> {
                             self.write_operator_name(op)?;
                         }
                     }
-                    &Operator::LiteralOperatorName => {}
+                    Operator::LiteralOperatorName => {}
                     _ => {
                         self.write_space()?;
                         // Print out an overloaded operator.
@@ -2096,20 +2097,20 @@ impl<'a> Serializer<'a> {
                     }
                 }
             }
-            &Name::NonTemplate(ref name) => {
+            Name::NonTemplate(ref name) => {
                 self.w.write_all(name)?;
             }
-            &Name::Template(ref name, ref params) => {
+            Name::Template(ref name, ref params) => {
                 self.write_one_name(name)?;
                 self.write_tmpl_params(&params)?;
             }
-            &Name::Discriminator(ref val) => {
+            Name::Discriminator(ref val) => {
                 write!(self.w, "`{}'", val)?;
             }
-            &Name::ParsedName(ref val) => {
+            Name::ParsedName(ref val) => {
                 write!(self.w, "{}", serialize(val, self.flags).unwrap())?;
             }
-            &Name::AnonymousNamespace => {
+            Name::AnonymousNamespace => {
                 panic!("not supposed to be here");
             }
         }
