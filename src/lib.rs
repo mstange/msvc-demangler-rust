@@ -65,14 +65,14 @@ pub type Result<T> = result::Result<T, Error>;
 
 bitflags! {
     pub struct StorageClass: u32 {
-        const CONST       = 0b00000001;
-        const VOLATILE    = 0b00000010;
-        const FAR         = 0b00000100;
-        const HUGE        = 0b00001000;
-        const UNALIGNED   = 0b00010000;
-        const RESTRICT    = 0b00100000;
-        const LVALUE_QUAL = 0b01000000;
-        const RVALUE_QUAL = 0b10000000;
+        const CONST       = 0b0000_0001;
+        const VOLATILE    = 0b0000_0010;
+        const FAR         = 0b0000_0100;
+        const HUGE        = 0b0000_1000;
+        const UNALIGNED   = 0b0001_0000;
+        const RESTRICT    = 0b0010_0000;
+        const LVALUE_QUAL = 0b0100_0000;
+        const RVALUE_QUAL = 0b1000_0000;
     }
 }
 
@@ -116,23 +116,23 @@ bitflags! {
         // const NO_THROW_SIGNATURES = 0x0100;
         /// Disable output of struct/union/class/enum specifiers.
         // (Not sure if this duplicates an existing flag)
-        const NO_CLASS_TYPE = 0x100000;
+        const NO_CLASS_TYPE = 0x10_0000;
         /// Insert a space after each comma.
-        const SPACE_AFTER_COMMA = 0x200000;
+        const SPACE_AFTER_COMMA = 0x20_0000;
         /// Make * and & hug the type name.
-        const HUG_TYPE = 0x400000;
+        const HUG_TYPE = 0x40_0000;
         /// Insert a space before pointers.
-        const SPACE_BEFORE_POINTER = 0x800000;
+        const SPACE_BEFORE_POINTER = 0x80_0000;
     }
 }
 
 impl DemangleFlags {
     pub fn llvm() -> DemangleFlags {
-        DemangleFlags::COMPLETE |
-        DemangleFlags::SPACE_AFTER_COMMA |
-        DemangleFlags::SPACE_BEFORE_POINTER |
-        DemangleFlags::MS_TYPENAMES |
-        DemangleFlags::HUG_TYPE
+        DemangleFlags::COMPLETE
+            | DemangleFlags::SPACE_AFTER_COMMA
+            | DemangleFlags::SPACE_BEFORE_POINTER
+            | DemangleFlags::MS_TYPENAMES
+            | DemangleFlags::HUG_TYPE
     }
 }
 
@@ -149,14 +149,14 @@ pub enum CallingConv {
 
 bitflags! {
     pub struct FuncClass: u32 {
-        const PUBLIC     = 0b00000001;
-        const PROTECTED  = 0b00000010;
-        const PRIVATE    = 0b00000100;
-        const GLOBAL     = 0b00001000;
-        const STATIC     = 0b00010000;
-        const VIRTUAL    = 0b00100000;
-        const FAR        = 0b01000000;
-        const THUNK      = 0b10000000;
+        const PUBLIC     = 0b0000_0001;
+        const PROTECTED  = 0b0000_0010;
+        const PRIVATE    = 0b0000_0100;
+        const GLOBAL     = 0b0000_1000;
+        const STATIC     = 0b0001_0000;
+        const VIRTUAL    = 0b0010_0000;
+        const FAR        = 0b0100_0000;
+        const THUNK      = 0b1000_0000;
     }
 }
 
@@ -737,11 +737,7 @@ impl<'a> ParserState<'a> {
             self.memorized_names[i].clone()
         } else if self.consume(b"?") {
             match self.peek() {
-                Some(b'?') => {
-                    let name = Name::ParsedName(Box::new(self.parse()?));
-                    // println!("parsed name: {}", str::from_utf8(self.input)?);
-                    name
-                }
+                Some(b'?') => Name::ParsedName(Box::new(self.parse()?)),
                 _ => {
                     if self.consume(b"$") {
                         let name = self.read_template_name()?;
@@ -828,12 +824,12 @@ impl<'a> ParserState<'a> {
         let calling_conv = self.read_calling_conv()?;
         let return_type = self.read_var_type(StorageClass::empty())?;
         let params = self.read_func_params()?;
-        return Ok(Type::NonMemberFunction(
+        Ok(Type::NonMemberFunction(
             calling_conv,
             params,
             StorageClass::empty(),
             Box::new(return_type),
-        ));
+        ))
     }
 
     fn read_operator(&mut self) -> Result<Name<'a>> {
@@ -1168,7 +1164,11 @@ impl<'a> ParserState<'a> {
             if self.consume(b"$Q") {
                 return Ok(Type::RValueRef(Box::new(self.read_pointee()?), sc));
             }
-            if self.consume(b"S") || self.consume(b"$V") || self.consume(b"$Z") || self.consume(b"$$V") {
+            if self.consume(b"S")
+                || self.consume(b"$V")
+                || self.consume(b"$Z")
+                || self.consume(b"$$V")
+            {
                 return Ok(Type::EmptyParameterPack);
             }
             if self.consume(b"$T") {
@@ -1536,7 +1536,6 @@ impl<'a> Serializer<'a> {
             &Type::Ptr(ref inner, storage_class)
             | &Type::Ref(ref inner, storage_class)
             | &Type::RValueRef(ref inner, storage_class) => {
-
                 // "[]" and "()" (for function parameters) take precedence over "*",
                 // so "int *x(int)" means "x is a function returning int *". We need
                 // parentheses to supercede the default precedence. (e.g. we want to
@@ -1598,7 +1597,9 @@ impl<'a> Serializer<'a> {
                     VarStorageKind::PrivateStatic => write!(self.w, "private: static ")?,
                     VarStorageKind::ProtectedStatic => write!(self.w, "protected: static ")?,
                     VarStorageKind::PublicStatic => write!(self.w, "public: static ")?,
-                    VarStorageKind::Global | VarStorageKind::FunctionLocalStatic | VarStorageKind::None => {}
+                    VarStorageKind::Global
+                    | VarStorageKind::FunctionLocalStatic
+                    | VarStorageKind::None => {}
                 }
                 self.write_pre(inner)?;
                 sc
@@ -1787,7 +1788,7 @@ impl<'a> Serializer<'a> {
             }
             &Type::CXXVBTable(ref names, _sc) => {
                 self.write_scope(names)?;
-                write!(self.w, "{}", "\'}")?; // the rest of the "operator"
+                write!(self.w, "\'}}")?; // the rest of the "operator"
             }
             &Type::Ptr(ref inner, _sc) | &Type::Ref(ref inner, _sc) => {
                 match inner.as_ref() {
@@ -1828,7 +1829,11 @@ impl<'a> Serializer<'a> {
 
     // Write a function or template parameter list.
     fn write_types(&mut self, types: &[Type]) -> SerializeResult<()> {
-        for (idx, param) in types.iter().filter(|x| **x != Type::EmptyParameterPack).enumerate() {
+        for (idx, param) in types
+            .iter()
+            .filter(|x| **x != Type::EmptyParameterPack)
+            .enumerate()
+        {
             if idx > 0 {
                 write!(self.w, ",")?;
                 if self.flags.contains(DemangleFlags::SPACE_AFTER_COMMA) {
@@ -1870,7 +1875,12 @@ impl<'a> Serializer<'a> {
 
     fn write_space(&mut self) -> SerializeResult<()> {
         if let Some(&c) = self.w.last() {
-            if char::from(c).is_ascii_alphabetic() || c == b'*' || c == b'&' || c == b'>' || c == b')' {
+            if char::from(c).is_ascii_alphabetic()
+                || c == b'*'
+                || c == b'&'
+                || c == b'>'
+                || c == b')'
+            {
                 write!(self.w, " ")?;
             }
         }
@@ -1962,7 +1972,11 @@ impl<'a> Serializer<'a> {
                 return Ok(());
             }
             &Operator::RTTIBaseClassDescriptor(nv_offset, vbptr_offset, vbtable_offset, flags) => {
-                let sp = if self.flags.contains(DemangleFlags::SPACE_AFTER_COMMA) { " " } else { "" };
+                let sp = if self.flags.contains(DemangleFlags::SPACE_AFTER_COMMA) {
+                    " "
+                } else {
+                    ""
+                };
                 write!(
                     self.w,
                     "`RTTI Base Class Descriptor at ({},{}{},{}{},{}{})'",
@@ -2047,20 +2061,20 @@ impl<'a> Serializer<'a> {
             &Name::Operator(ref op) => {
                 match op {
                     &Operator::Ctor => {
-                        let prev = names.scope.names.iter().nth(0).expect(
+                        let prev = names.scope.names.iter().next().expect(
                             "If there's a ctor, there should be another name in this sequence",
                         );
                         self.write_one_name(prev)?;
                     }
                     &Operator::Dtor => {
-                        let prev = names.scope.names.iter().nth(0).expect(
+                        let prev = names.scope.names.iter().next().expect(
                             "If there's a dtor, there should be another name in this sequence",
                         );
                         write!(self.w, "~")?;
                         self.write_one_name(prev)?;
                     }
                     &Operator::VBTable => {
-                        write!(self.w, "{}", "`vbtable'{for `")?;
+                        write!(self.w, "`vbtable'{{for `")?;
                         // The rest will be written by write_post of the
                         // symbol type.
                     }
@@ -2083,7 +2097,7 @@ impl<'a> Serializer<'a> {
                 }
             }
             &Name::NonTemplate(ref name) => {
-                self.w.write(name)?;
+                self.w.write_all(name)?;
             }
             &Name::Template(ref name, ref params) => {
                 self.write_one_name(name)?;
