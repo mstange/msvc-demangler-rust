@@ -1,7 +1,7 @@
 extern crate msvc_demangler;
 
-use std::iter;
 use msvc_demangler::{parse, serialize, DemangleFlags};
+use std::iter;
 
 #[derive(Debug)]
 pub struct TestCase<'a> {
@@ -17,7 +17,7 @@ enum LineRule<'a> {
     CheckNotInvalid,
 }
 
-fn parse_cases<'a, I: Iterator<Item=&'a str>>(i: I) -> impl Iterator<Item=TestCase<'a>> {
+fn parse_cases<'a, I: Iterator<Item = &'a str>>(i: I) -> impl Iterator<Item = TestCase<'a>> {
     let mut rule_iter = i.filter_map(|item| {
         let item = item.trim();
         if item.is_empty() {
@@ -39,35 +39,33 @@ fn parse_cases<'a, I: Iterator<Item=&'a str>>(i: I) -> impl Iterator<Item=TestCa
     });
 
     let mut not_invalid = false;
-    iter::from_fn(move || {
-        loop {
-            match rule_iter.next() {
-                None => return None,
-                Some(LineRule::CheckNotInvalid) => {
-                    not_invalid = true;
-                }
-                Some(LineRule::Input(input)) => {
-                    while let Some(next) = rule_iter.next() {
-                        match next {
-                            LineRule::CheckNotInvalid => {
-                                panic!("not invalid at unexpected position");
-                            }
-                            LineRule::Check(check) => {
-                                return Some(TestCase {
-                                    mangled: input,
-                                    demangled_ref: check,
-                                    not_invalid,
-                                });
-                            }
-                            LineRule::Input(_) => {
-                                panic!("multi line input unsupported");
-                            }
+    iter::from_fn(move || loop {
+        match rule_iter.next() {
+            None => return None,
+            Some(LineRule::CheckNotInvalid) => {
+                not_invalid = true;
+            }
+            Some(LineRule::Input(input)) => {
+                while let Some(next) = rule_iter.next() {
+                    match next {
+                        LineRule::CheckNotInvalid => {
+                            panic!("not invalid at unexpected position");
+                        }
+                        LineRule::Check(check) => {
+                            return Some(TestCase {
+                                mangled: input,
+                                demangled_ref: check,
+                                not_invalid,
+                            });
+                        }
+                        LineRule::Input(_) => {
+                            panic!("multi line input unsupported");
                         }
                     }
                 }
-                Some(LineRule::Check(check)) => {
-                    panic!("unexpected check: {}", check);
-                }
+            }
+            Some(LineRule::Check(check)) => {
+                panic!("unexpected check: {}", check);
             }
         }
     })
@@ -88,13 +86,16 @@ macro_rules! llvm_test {
                     .replace("constructor", "ctor")
                     .replace("destructor", "dtor")
                     .replace("::`RTTI", " `RTTI");
-                assert!(demangled_fuzzy.contains(case.demangled_ref) || demangled.contains(case.demangled_ref));
+                assert!(
+                    demangled_fuzzy.contains(case.demangled_ref)
+                        || demangled.contains(case.demangled_ref)
+                );
             } else {
                 panic!("not implemented");
             }
             println!();
         }
-    }}
+    }};
 }
 
 #[test]

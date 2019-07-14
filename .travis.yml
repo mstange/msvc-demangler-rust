@@ -1,3 +1,14 @@
 language: rust
 rust:
   - stable
+
+matrix:
+  include:
+    - name: "check"
+      script: make check
+
+    - name: "lint"
+      script: make lint
+
+    - name: "test"
+      script: make test

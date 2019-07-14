@@ -819,6 +819,6 @@ fn upstream_tests() {
     );
     expect(
         "??__FFLASH_TEMP_FILENAME@sandboxing@mozilla@@YAXXZ",
-        "void __cdecl mozilla::sandboxing::FLASH_TEMP_FILENAME::`dynamic atexit destructor'(void)"
+        "void __cdecl mozilla::sandboxing::FLASH_TEMP_FILENAME::`dynamic atexit destructor'(void)",
     )
 }
