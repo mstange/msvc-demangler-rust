@@ -412,7 +412,6 @@ impl<'a> ParserState<'a> {
         let symbol = self.read_name(true)?;
 
         if let Ok(c) = self.get() {
-            dbg!(c);
             let symbol_type = match c {
                 b'0'...b'5' => {
                     // Read a variable.
