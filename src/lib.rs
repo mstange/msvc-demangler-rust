@@ -2985,5 +2985,9 @@ mod tests {
             "??$templ_fun_with_ty_pack@$$V@@YAXXZ",
             "void __cdecl templ_fun_with_ty_pack<>(void)",
         );
+        expect(
+            "??__FFLASH_TEMP_FILENAME@sandboxing@mozilla@@YAXXZ",
+            "void __cdecl mozilla::sandboxing::FLASH_TEMP_FILENAME::`dynamic atexit destructor'(void)"
+        )
     }
 }
