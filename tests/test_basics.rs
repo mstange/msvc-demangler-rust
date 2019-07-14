@@ -1,17 +1,21 @@
 extern crate msvc_demangler;
 
-use msvc_demangler::{demangle, DemangleFlags, Result};
+use msvc_demangler::{demangle, DemangleFlags};
 
 fn expect_with_flags(input: &str, reference: &str, flags: u32) {
-    let demangled: Result<_> = demangle(input, ::DemangleFlags::from_bits(flags).unwrap());
-    let reference: Result<_> = Ok(reference.to_owned());
-    assert_eq!(demangled, reference);
+    let demangled = demangle(input, ::DemangleFlags::from_bits(flags).unwrap());
+    let reference = reference.to_owned();
+    if let Ok(demangled) = demangled {
+        assert_eq!(demangled, reference);
+    } else {
+        panic!("{:?} != {:?}", demangled, Ok::<_, ()>(reference));
+    }
 }
 
 // For cases where undname demangles differently/better than we do.
 fn expect_failure(input: &str, reference: &str) {
-    let demangled: Result<_> = demangle(input, ::DemangleFlags::COMPLETE);
-    let reference: Result<_> = Ok(reference.to_owned());
+    let demangled = demangle(input, ::DemangleFlags::COMPLETE).unwrap();
+    let reference = reference.to_owned();
     assert_ne!(demangled, reference);
 }
 // std::basic_filebuf<char,struct std::char_traits<char> >::basic_filebuf<char,struct std::char_traits<char> >

@@ -23,64 +23,76 @@
 //! This msvc-demangler is dual licensed under the MIT and the University of
 //! Illinois Open Source Licenses.
 
+#![deny(missing_debug_implementations)]
+#![deny(unsafe_code)]
+
 #[macro_use]
 extern crate bitflags;
 
 use std::cmp::min;
+use std::error;
+use std::fmt;
+use std::io;
 use std::io::Write;
 use std::mem;
 use std::result;
 use std::str;
+use std::str::Utf8Error;
+use std::string::FromUtf8Error;
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Error {
-    s: String,
+#[derive(Debug)]
+pub enum Error {
+    FromUtf8(FromUtf8Error),
+    Utf8(Utf8Error),
+    Io(io::Error),
+    Other(String),
 }
 
 impl Error {
-    fn new(s: String) -> Error {
-        Error { s }
+    pub fn new<S: Into<String>>(s: S) -> Error {
+        Error::Other(s.into())
     }
 }
 
-impl From<std::str::Utf8Error> for Error {
-    fn from(t: std::str::Utf8Error) -> Error {
-        Error {
-            s: format!("{:?}", t),
+impl From<Utf8Error> for Error {
+    fn from(err: Utf8Error) -> Error {
+        Error::Utf8(err)
+    }
+}
+
+impl From<FromUtf8Error> for Error {
+    fn from(err: FromUtf8Error) -> Error {
+        Error::FromUtf8(err)
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Error {
+        Error::Io(err)
+    }
+}
+
+impl error::Error for Error {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match *self {
+            Error::FromUtf8(ref e) => Some(&*e),
+            Error::Utf8(ref e) => Some(&*e),
+            Error::Io(ref e) => Some(&*e),
+            Error::Other(_) => None,
         }
     }
 }
 
-impl From<std::string::FromUtf8Error> for Error {
-    fn from(t: std::string::FromUtf8Error) -> Error {
-        Error {
-            s: format!("{:?}", t),
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Error::FromUtf8(ref e) => fmt::Display::fmt(e, f),
+            Error::Utf8(ref e) => fmt::Display::fmt(e, f),
+            Error::Io(ref e) => fmt::Display::fmt(e, f),
+            Error::Other(ref msg) => write!(f, "{}", msg),
         }
     }
 }
-
-#[derive(Debug, Clone)]
-struct SerializeError {
-    s: String,
-}
-
-impl From<std::str::Utf8Error> for SerializeError {
-    fn from(err: std::str::Utf8Error) -> SerializeError {
-        SerializeError {
-            s: format!("{:?}", err),
-        }
-    }
-}
-
-impl From<std::io::Error> for SerializeError {
-    fn from(err: std::io::Error) -> SerializeError {
-        SerializeError {
-            s: format!("{:?}", err),
-        }
-    }
-}
-
-type SerializeResult<T> = result::Result<T, SerializeError>;
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -509,11 +521,11 @@ impl<'a> ParserState<'a> {
                         };
                         let ref_qualifiers = match self.peek() {
                             Some(b'G') => {
-                                self.expect(b"G").unwrap();
+                                self.expect(b"G")?;
                                 StorageClass::LVALUE_QUAL
                             }
                             Some(b'H') => {
-                                self.expect(b"H").unwrap();
+                                self.expect(b"H")?;
                                 StorageClass::RVALUE_QUAL
                             }
                             _ => StorageClass::empty(),
@@ -556,7 +568,7 @@ impl<'a> ParserState<'a> {
                 self.trim(1);
                 Ok(first)
             }
-            None => {panic!("Unexpected end of input");}// Err(Error::new("unexpected end of input".to_owned())),
+            None => Err(Error::new("unexpected end of input".to_owned())),
         }
     }
 
@@ -575,13 +587,14 @@ impl<'a> ParserState<'a> {
 
     fn expect(&mut self, s: &[u8]) -> Result<()> {
         if !self.consume(s) {
-            return Err(Error::new(format!(
+            Err(Error::new(format!(
                 "{} expected, but got {}",
                 str::from_utf8(s)?,
                 str::from_utf8(self.input)?
-            )));
+            )))
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 
     fn consume_digit(&mut self) -> Option<u8> {
@@ -1390,7 +1403,7 @@ pub fn serialize(input: &ParseResult, flags: DemangleFlags) -> Result<String> {
     let mut s = Vec::new();
     {
         let mut serializer = Serializer { flags, w: &mut s };
-        serializer.serialize(&input).unwrap();
+        serializer.serialize(&input)?;
     }
     Ok(String::from_utf8(s)?)
 }
@@ -1418,7 +1431,7 @@ struct Serializer<'a> {
 }
 
 impl<'a> Serializer<'a> {
-    fn serialize(&mut self, parse_result: &ParseResult) -> SerializeResult<()> {
+    fn serialize(&mut self, parse_result: &ParseResult) -> Result<()> {
         if !self
             .flags
             .intersects(DemangleFlags::NAME_ONLY | DemangleFlags::NO_FUNCTION_RETURNS)
@@ -1432,7 +1445,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_calling_conv(&mut self, calling_conv: CallingConv) -> SerializeResult<()> {
+    fn write_calling_conv(&mut self, calling_conv: CallingConv) -> Result<()> {
         match self.w.last() {
             Some(b' ') | Some(b'(') => {}
             _ => write!(self.w, " ")?,
@@ -1462,7 +1475,7 @@ impl<'a> Serializer<'a> {
     }
 
     // Write the "first half" of a given type.
-    fn write_pre(&mut self, t: &Type) -> SerializeResult<()> {
+    fn write_pre(&mut self, t: &Type) -> Result<()> {
         let storage_class = match *t {
             Type::None => return Ok(()),
             Type::MemberFunction(func_class, calling_conv, _, _, ref inner) => {
@@ -1742,13 +1755,13 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_memfn_qualifiers(&mut self, sc: StorageClass) -> SerializeResult<()> {
+    fn write_memfn_qualifiers(&mut self, sc: StorageClass) -> Result<()> {
         if self.flags.contains(DemangleFlags::NO_THISTYPE) {
             // TODO: should probably check for NO_CV_THISTYPE and NO_MS_THISTYPE
             // separately but I don't know what exactly those affect.
             return Ok(());
         }
-        let mut write_one_qual = |flag, s| -> SerializeResult<()> {
+        let mut write_one_qual = |flag, s| -> Result<()> {
             if sc.contains(flag) {
                 self.write_space()?;
                 self.w.write_all(s)?;
@@ -1768,7 +1781,7 @@ impl<'a> Serializer<'a> {
     }
 
     // Write the "second half" of a given type.
-    fn write_post(&mut self, t: &Type) -> SerializeResult<()> {
+    fn write_post(&mut self, t: &Type) -> Result<()> {
         match *t {
             Type::MemberFunction(_, _, ref params, sc, ref return_type)
             | Type::NonMemberFunction(_, ref params, sc, ref return_type) => {
@@ -1834,7 +1847,7 @@ impl<'a> Serializer<'a> {
     }
 
     // Write a function or template parameter list.
-    fn write_types(&mut self, types: &[Type]) -> SerializeResult<()> {
+    fn write_types(&mut self, types: &[Type]) -> Result<()> {
         for (idx, param) in types
             .iter()
             .filter(|x| **x != Type::EmptyParameterPack)
@@ -1852,7 +1865,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_class(&mut self, names: &Symbol, s: &str) -> SerializeResult<()> {
+    fn write_class(&mut self, names: &Symbol, s: &str) -> Result<()> {
         if !self.flags.contains(DemangleFlags::NO_CLASS_TYPE) {
             write!(self.w, "{}", s)?;
             write!(self.w, " ")?;
@@ -1861,7 +1874,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_space_pre(&mut self) -> SerializeResult<()> {
+    fn write_space_pre(&mut self) -> Result<()> {
         if let Some(&c) = self.w.last() {
             if char::from(c).is_ascii_alphabetic() || c == b'&' || c == b'>' || c == b')' {
                 write!(self.w, " ")?;
@@ -1870,7 +1883,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_space_ptr(&mut self) -> SerializeResult<()> {
+    fn write_space_ptr(&mut self) -> Result<()> {
         if let Some(&c) = self.w.last() {
             if char::from(c).is_ascii_alphabetic() || c == b'>' || c == b')' {
                 write!(self.w, " ")?;
@@ -1879,7 +1892,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_space(&mut self) -> SerializeResult<()> {
+    fn write_space(&mut self) -> Result<()> {
         if let Some(&c) = self.w.last() {
             if char::from(c).is_ascii_alphabetic()
                 || c == b'*'
@@ -1893,7 +1906,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_operator_name(&mut self, op: &Operator) -> SerializeResult<()> {
+    fn write_operator_name(&mut self, op: &Operator) -> Result<()> {
         let s = match *op {
             Operator::Ctor => "ctor",
             Operator::Dtor => "dtor",
@@ -2003,7 +2016,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_one_name(&mut self, name: &Name) -> SerializeResult<()> {
+    fn write_one_name(&mut self, name: &Name) -> Result<()> {
         match *name {
             Name::Operator(ref op) => {
                 self.write_space()?;
@@ -2020,7 +2033,7 @@ impl<'a> Serializer<'a> {
                 write!(self.w, "`{}'", val)?;
             }
             Name::ParsedName(ref val) => {
-                write!(self.w, "`{}'", serialize(val, self.flags).unwrap())?;
+                write!(self.w, "`{}'", serialize(val, self.flags)?)?;
             }
             Name::AnonymousNamespace => {
                 write!(self.w, "`anonymous namespace'")?;
@@ -2029,7 +2042,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_scope(&mut self, names: &NameSequence) -> SerializeResult<()> {
+    fn write_scope(&mut self, names: &NameSequence) -> Result<()> {
         // Print out namespaces or outer class names.
         let mut i = names.names.iter().rev();
         if let Some(name) = i.next() {
@@ -2043,7 +2056,7 @@ impl<'a> Serializer<'a> {
     }
 
     // Write a name read by read_name().
-    fn write_name(&mut self, names: &Symbol, ty: Option<&Type<'_>>) -> SerializeResult<()> {
+    fn write_name(&mut self, names: &Symbol, ty: Option<&Type<'_>>) -> Result<()> {
         if !self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
             self.write_space_pre()?;
         } else {
@@ -2067,15 +2080,19 @@ impl<'a> Serializer<'a> {
             Name::Operator(ref op) => {
                 match *op {
                     Operator::Ctor => {
-                        let prev = names.scope.names.iter().next().expect(
-                            "If there's a ctor, there should be another name in this sequence",
-                        );
+                        let prev = names.scope.names.iter().next().ok_or_else(|| {
+                            Error::new(
+                                "If there's a ctor, there should be another name in this sequence",
+                            )
+                        })?;
                         self.write_one_name(prev)?;
                     }
                     Operator::Dtor => {
-                        let prev = names.scope.names.iter().next().expect(
-                            "If there's a dtor, there should be another name in this sequence",
-                        );
+                        let prev = names.scope.names.iter().next().ok_or_else(|| {
+                            Error::new(
+                                "If there's a dtor, there should be another name in this sequence",
+                            )
+                        })?;
                         write!(self.w, "~")?;
                         self.write_one_name(prev)?;
                     }
@@ -2113,16 +2130,17 @@ impl<'a> Serializer<'a> {
                 write!(self.w, "`{}'", val)?;
             }
             Name::ParsedName(ref val) => {
-                write!(self.w, "{}", serialize(val, self.flags).unwrap())?;
+                write!(self.w, "{}", serialize(val, self.flags)?)?;
             }
             Name::AnonymousNamespace => {
-                panic!("not supposed to be here");
+                // this should never happen as they are handled elsewhere
+                debug_assert!(false, "not supposed to be here");
             }
         }
         Ok(())
     }
 
-    fn write_tmpl_params<'b>(&mut self, params: &Params<'b>) -> SerializeResult<()> {
+    fn write_tmpl_params<'b>(&mut self, params: &Params<'b>) -> Result<()> {
         write!(self.w, "<")?;
         if !params.types.is_empty() {
             self.write_types(&params.types)?;
