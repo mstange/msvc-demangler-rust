@@ -1,7 +1,7 @@
 extern crate msvc_demangler;
 
 use std::iter;
-use msvc_demangler::{demangle, DemangleFlags};
+use msvc_demangler::{parse, serialize, DemangleFlags};
 
 #[derive(Debug)]
 pub struct TestCase<'a> {
@@ -78,12 +78,16 @@ macro_rules! llvm_test {
         let rules = include_str!($filename);
         for case in parse_cases(rules.lines()) {
             if case.not_invalid {
-                let demangled = demangle(case.mangled, DemangleFlags::llvm()).unwrap();
+                let parsed = dbg!(parse(case.mangled).unwrap());
+                let demangled = serialize(&parsed, DemangleFlags::llvm()).unwrap();
                 println!("      mangled: {}", case.mangled);
                 println!("demangled ref: {}", case.demangled_ref);
                 println!("    demangled: {}", &demangled);
                 assert!(demangled.contains(case.demangled_ref));
+            } else {
+                panic!("not implemented");
             }
+            println!();
         }
     }}
 }

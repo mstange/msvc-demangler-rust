@@ -160,6 +160,17 @@ bitflags! {
     }
 }
 
+// The kind of variable storage. In LLVM this is called storage class.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VarStorageKind {
+    None,
+    PrivateStatic,
+    ProtectedStatic,
+    PublicStatic,
+    Global,
+    FunctionLocalStatic,
+}
+
 // Represents an identifier which may be a template.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Name<'a> {
@@ -300,6 +311,7 @@ pub enum Type<'a> {
     Ref(Box<Type<'a>>, StorageClass),
     RValueRef(Box<Type<'a>>, StorageClass),
     Array(i32, Box<Type<'a>>, StorageClass),
+    Var(Box<Type<'a>>, VarStorageKind, StorageClass),
 
     Struct(Symbol<'a>, StorageClass),
     Union(Symbol<'a>, StorageClass),
@@ -395,10 +407,21 @@ impl<'a> ParserState<'a> {
         let symbol = self.read_name(true)?;
 
         if let Ok(c) = self.get() {
+            dbg!(c);
             let symbol_type = match c {
                 b'0'...b'5' => {
                     // Read a variable.
-                    self.read_var_type(StorageClass::empty())?
+                    let kind = match c {
+                        b'0' => VarStorageKind::PrivateStatic,
+                        b'1' => VarStorageKind::ProtectedStatic,
+                        b'2' => VarStorageKind::PublicStatic,
+                        b'3' => VarStorageKind::Global,
+                        b'4' => VarStorageKind::FunctionLocalStatic,
+                        _ => VarStorageKind::None,
+                    };
+                    let ty = self.read_var_type(StorageClass::empty())?;
+                    let sc = self.read_storage_class();
+                    Type::Var(Box::new(ty), kind, sc)
                 }
                 b'6' => {
                     let access_class = self.read_qualifier();
@@ -1038,6 +1061,10 @@ impl<'a> ParserState<'a> {
             Some(b'F') => StorageClass::CONST | StorageClass::FAR,
             Some(b'G') => StorageClass::VOLATILE | StorageClass::FAR,
             Some(b'H') => StorageClass::CONST | StorageClass::VOLATILE | StorageClass::FAR,
+            Some(b'Q') => StorageClass::empty(),
+            Some(b'R') => StorageClass::CONST,
+            Some(b'S') => StorageClass::VOLATILE,
+            Some(b'T') => StorageClass::CONST | StorageClass::VOLATILE,
             _ => return StorageClass::empty(),
         };
         self.trim(1);
@@ -1549,6 +1576,16 @@ impl<'a> Serializer<'a> {
                 self.write_pre(inner)?;
                 storage_class
             }
+            &Type::Var(ref inner, kind, sc) => {
+                match kind {
+                    VarStorageKind::PrivateStatic => write!(self.w, "private: static ")?,
+                    VarStorageKind::ProtectedStatic => write!(self.w, "protected: static ")?,
+                    VarStorageKind::PublicStatic => write!(self.w, "public: static ")?,
+                    VarStorageKind::Global | VarStorageKind::FunctionLocalStatic | VarStorageKind::None => {}
+                }
+                self.write_pre(inner)?;
+                sc
+            }
             &Type::Struct(ref names, sc) => {
                 self.write_class(names, "struct")?;
                 sc
@@ -1748,6 +1785,9 @@ impl<'a> Serializer<'a> {
             }
             &Type::Array(len, ref inner, _sc) => {
                 write!(self.w, "[{}]", len)?;
+                self.write_post(inner)?;
+            }
+            &Type::Var(ref inner, _kind, _sc) => {
                 self.write_post(inner)?;
             }
             &Type::CXXVFTable(ref names, _) => {

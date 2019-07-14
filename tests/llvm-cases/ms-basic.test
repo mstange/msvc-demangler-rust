@@ -239,3 +239,6 @@
 
 ??_V@YAXPEAXAEAVklass@@@Z
 ; CHECK: void __cdecl operator delete[](void *, class klass &)
+
+?A@?A0x43583946@@3VB@@B
+; CHECK: class B const `anonymous namespace'::A
