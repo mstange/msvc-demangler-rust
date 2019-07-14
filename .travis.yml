@@ -5,10 +5,10 @@ rust:
 matrix:
   include:
     - name: "check"
-      script: make -e check
+      script: make check
 
     - name: "lint"
-      script: make -e lint
+      script: make lint
 
     - name: "test"
-      script: make -e test
+      script: make test
