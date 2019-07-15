@@ -27,6 +27,7 @@
 extern crate bitflags;
 
 use std::cmp::min;
+use std::fmt;
 use std::io::Write;
 use std::mem;
 use std::result;
@@ -193,7 +194,7 @@ pub enum VarStorageKind {
 }
 
 // Represents an identifier which may be a template.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Name<'a> {
     Operator(Operator<'a>),
     NonTemplate(&'a [u8]),
@@ -201,6 +202,24 @@ pub enum Name<'a> {
     Discriminator(i32),
     ParsedName(Box<ParseResult<'a>>),
     AnonymousNamespace,
+}
+
+impl<'a> fmt::Debug for Name<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Name::Operator(ref op) => f.debug_tuple("Operator").field(&op).finish(),
+            Name::NonTemplate(s) => f
+                .debug_tuple("NonTemplate")
+                .field(&String::from_utf8_lossy(s))
+                .finish(),
+            Name::Template(ref name, ref params) => {
+                f.debug_tuple("Template").field(name).field(params).finish()
+            }
+            Name::Discriminator(i) => f.debug_tuple("Discriminator").field(&i).finish(),
+            Name::ParsedName(ref res) => f.debug_tuple("ParsedName").field(res).finish(),
+            Name::AnonymousNamespace => f.debug_tuple("AnonymousNamespace").finish(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
