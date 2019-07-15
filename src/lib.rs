@@ -849,7 +849,15 @@ impl<'a> ParserState<'a> {
 
     fn read_func_type(&mut self) -> Result<Type<'a>> {
         let calling_conv = self.read_calling_conv()?;
-        let return_type = self.read_var_type(StorageClass::empty())?;
+        // this might have to be conditional on template context.  For now
+        // this does not cause issues.  For more information see
+        // https://github.com/mstange/msvc-demangler-rust/issues/21
+        let sc = if self.consume(b"?") {
+            self.read_storage_class()
+        } else {
+            StorageClass::empty()
+        };
+        let return_type = self.read_var_type(sc)?;
         let params = self.read_func_params()?;
         Ok(Type::NonMemberFunction(
             calling_conv,
