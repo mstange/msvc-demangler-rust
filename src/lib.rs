@@ -1521,12 +1521,13 @@ impl<'a> Serializer<'a> {
             }
             Type::MemberFunctionPointer(ref symbol, _, calling_conv, _, _, ref inner) => {
                 self.write_pre(inner)?;
-                self.write_calling_conv(calling_conv)?;
                 self.write_space()?;
                 write!(self.w, "(")?;
+                self.write_calling_conv(calling_conv)?;
+                self.write_space()?;
                 self.write_space()?;
                 self.write_name(symbol, None)?;
-                write!(self.w, "::*)")?;
+                write!(self.w, "::*")?;
                 return Ok(());
             }
             Type::NonMemberFunction(calling_conv, _, _, ref inner) => {
@@ -1803,20 +1804,19 @@ impl<'a> Serializer<'a> {
                 self.write_types(&params.types)?;
                 write!(self.w, ")")?;
 
-                self.write_post(return_type)?;
-
                 self.write_memfn_qualifiers(sc)?;
+                self.write_post(return_type)?;
             }
             Type::MemberFunctionPointer(_, _, _, ref params, sc, ref return_type) => {
-                write!(self.w, "(")?;
+                write!(self.w, ")(")?;
                 self.write_types(&params.types)?;
                 write!(self.w, ")")?;
 
                 self.write_post(return_type)?;
 
                 if sc.contains(StorageClass::CONST) {
-                    write!(self.w, "const")?;
                     self.write_space()?;
+                    write!(self.w, "const")?;
                 }
             }
             Type::CXXVBTable(ref names, _sc) => {
