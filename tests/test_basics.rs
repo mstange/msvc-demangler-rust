@@ -172,7 +172,11 @@ fn other_tests() {
     expect(
         "??_R1A@?0A@EA@U@i@@8",
         "i::U::`RTTI Base Class Descriptor at (0,-1,0,64)'",
-    )
+    );
+    expect(
+        "?getFactory@SkImageShader@@UBEP6A?AV?$sk_sp@VSkFlattenable@@@@AAVSkReadBuffer@@@ZXZ",
+        "public: virtual class sk_sp<class SkFlattenable> (__cdecl * __thiscall SkImageShader::getFactory(void) const)(class SkReadBuffer &)"
+    );
 }
 
 #[test]
