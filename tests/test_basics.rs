@@ -59,11 +59,11 @@ fn other_tests() {
     expect("??_7W@?A@@6B@", "const `anonymous namespace'::W::`vftable'");
     expect(
         "??_7?$RunnableMethodImpl@PEAVLazyIdleThread@mozilla@@P812@EAAXXZ$0A@$0A@$$V@detail@mozilla@@6BnsIRunnable@@@",
-        "const mozilla::detail::RunnableMethodImpl<class mozilla::LazyIdleThread *,void __cdecl (mozilla::LazyIdleThread::*)(void),0,0>::`vftable\'{for `nsIRunnable\'}",
+        "const mozilla::detail::RunnableMethodImpl<class mozilla::LazyIdleThread *,void (__cdecl mozilla::LazyIdleThread::*)(void),0,0>::`vftable\'{for `nsIRunnable\'}",
     );
     expect_failure(
         "??_7?$RunnableMethodImpl@PEAVLazyIdleThread@mozilla@@P812@EAAXXZ$0A@$0A@$$V@detail@mozilla@@6BnsIRunnable@@@",
-        "const mozilla::detail::RunnableMethodImpl<class mozilla::LazyIdleThread * __ptr64,void __cdecl (mozilla::LazyIdleThread::*)(void) __ptr64,0,0>::`vftable\'{for `nsIRunnable\'}",
+        "const mozilla::detail::RunnableMethodImpl<class mozilla::LazyIdleThread * __ptr64,void (__cdecl mozilla::LazyIdleThread::*)(void) __ptr64,0,0>::`vftable\'{for `nsIRunnable\'}",
     );
     expect(
         "??1?$ns@$$CBVtxXP@@@@QAE@XZ",
@@ -141,11 +141,11 @@ fn other_tests() {
     );
     expect(
         "??$GenericCreateConstructor@$1?construct@SetObject@js@@CA_NPEAUJSContext@@IPEATValue@JS@@@Z$0A@$0A@$0A@@js@@YAPEAVJSObject@@PEAUJSContext@@W4JSProtoKey@@@Z",
-        "class JSObject * __cdecl js::GenericCreateConstructor<bool __cdecl (js::SetObject::construct::*)(struct JSContext *,unsigned int,union JS::Value *),0,0,0>(struct JSContext *,enum JSProtoKey)",
+        "class JSObject * __cdecl js::GenericCreateConstructor<bool (__cdecl js::SetObject::construct::*)(struct JSContext *,unsigned int,union JS::Value *),0,0,0>(struct JSContext *,enum JSProtoKey)",
     );
     expect_failure(
         "??$GenericCreateConstructor@$1?construct@SetObject@js@@CA_NPEAUJSContext@@IPEATValue@JS@@@Z$0A@$0A@$0A@@js@@YAPEAVJSObject@@PEAUJSContext@@W4JSProtoKey@@@Z",
-        "class JSObject * __ptr64 __cdecl js::GenericCreateConstructor<&private: static bool __cdecl (js::SetObject::construct::*)(struct JSContext * __ptr64,unsigned int,union JS::Value * __ptr64),0,0,0>(struct JSContext * __ptr64,enum JSProtoKey)",
+        "class JSObject * __ptr64 __cdecl js::GenericCreateConstructor<&private: static bool (__cdecl js::SetObject::construct::*)(struct JSContext * __ptr64,unsigned int,union JS::Value * __ptr64),0,0,0>(struct JSContext * __ptr64,enum JSProtoKey)",
     );
     expect(
         "??$emplace_hint@AEBUpiecewise_construct_t@std@@V?$tuple@AEBH@2@V?$tuple@$$V@2@@?$_Tree@V?$_Tmap_traits@HUPayload@RtpUtility@webrtc@@U?$less@H@std@@V?$allocator@U?$pair@$$CBHUPayload@RtpUtility@webrtc@@@std@@@5@$0A@@std@@@std@@QEAA?AV?$_Tree_iterator@V?$_Tree_val@U?$_Tree_simple_types@U?$pair@$$CBHUPayload@RtpUtility@webrtc@@@std@@@std@@@std@@@1@V?$_Tree_const_iterator@V?$_Tree_val@U?$_Tree_simple_types@U?$pair@$$CBHUPayload@RtpUtility@webrtc@@@std@@@std@@@std@@@1@AEBUpiecewise_construct_t@1@$$QEAV?$tuple@AEBH@1@$$QEAV?$tuple@$$V@1@@Z",
