@@ -1050,7 +1050,6 @@ impl<'a> ParserState<'a> {
             b'Y' => FuncClass::GLOBAL,
             b'Z' => FuncClass::GLOBAL | FuncClass::FAR,
             _ => {
-                dbg!(c);
                 return Err(Error::new(format!(
                     "unknown func class: {}",
                     str::from_utf8(&[c])?
