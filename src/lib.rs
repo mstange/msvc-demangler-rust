@@ -666,10 +666,7 @@ impl<'a> ParserState<'a> {
 
     fn expect(&mut self, s: &[u8]) -> Result<()> {
         if !self.consume(s) {
-            Err(self.fail_args(format_args!(
-                "{} expected",
-                str::from_utf8(s)?,
-            )))
+            Err(self.fail_args(format_args!("{} expected", str::from_utf8(s)?,)))
         } else {
             Ok(())
         }
