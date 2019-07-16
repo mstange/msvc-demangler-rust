@@ -5,17 +5,36 @@ use std::io;
 use std::io::BufRead;
 
 fn main() {
-    let args = env::args();
+    let mut args: Vec<_> = env::args().collect();
+    args.remove(0);
+
+    let verbose = if args.get(0).map(|x| x.as_str()) == Some("-v") {
+        args.remove(0);
+        true
+    } else {
+        false
+    };
 
     let print_demangled = |sym: &str| {
-        let demangled = msvc_demangler::demangle(&sym, msvc_demangler::DemangleFlags::llvm());
+        let parsed = match msvc_demangler::parse(&sym) {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                println!("{}", sym);
+                return;
+            }
+        };
+        if verbose {
+            eprintln!("{:#?}", &parsed);
+        }
+        let flags = msvc_demangler::DemangleFlags::llvm();
+        let demangled = msvc_demangler::serialize(&parsed, flags);
         match demangled {
             Ok(ref string) => println!("{}", string),
             _ => println!("{}", sym),
         }
     };
 
-    if args.len() == 1 {
+    if args.is_empty() {
         let stdin = io::stdin();
         let handle = stdin.lock();
 
@@ -25,14 +44,9 @@ fn main() {
                 _ => continue,
             }
         }
-        return;
-    }
-
-    for (i, arg) in env::args().enumerate() {
-        if i == 0 {
-            continue;
+    } else {
+        for arg in args {
+            print_demangled(&arg);
         }
-
-        print_demangled(&arg);
     }
 }

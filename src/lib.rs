@@ -205,7 +205,7 @@ pub enum VarStorageKind {
 }
 
 // Represents an identifier which may be a template.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Name<'a> {
     Operator(Operator<'a>),
     NonTemplate(&'a [u8]),
@@ -213,6 +213,24 @@ pub enum Name<'a> {
     Discriminator(i32),
     ParsedName(Box<ParseResult<'a>>),
     AnonymousNamespace,
+}
+
+impl<'a> fmt::Debug for Name<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Name::Operator(ref op) => f.debug_tuple("Operator").field(&op).finish(),
+            Name::NonTemplate(s) => f
+                .debug_tuple("NonTemplate")
+                .field(&String::from_utf8_lossy(s))
+                .finish(),
+            Name::Template(ref name, ref params) => {
+                f.debug_tuple("Template").field(name).field(params).finish()
+            }
+            Name::Discriminator(i) => f.debug_tuple("Discriminator").field(&i).finish(),
+            Name::ParsedName(ref res) => f.debug_tuple("ParsedName").field(res).finish(),
+            Name::AnonymousNamespace => f.debug_tuple("AnonymousNamespace").finish(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -843,7 +861,15 @@ impl<'a> ParserState<'a> {
 
     fn read_func_type(&mut self) -> Result<Type<'a>> {
         let calling_conv = self.read_calling_conv()?;
-        let return_type = self.read_var_type(StorageClass::empty())?;
+        // this might have to be conditional on template context.  For now
+        // this does not cause issues.  For more information see
+        // https://github.com/mstange/msvc-demangler-rust/issues/21
+        let sc = if self.consume(b"?") {
+            self.read_storage_class()
+        } else {
+            StorageClass::empty()
+        };
+        let return_type = self.read_var_type(sc)?;
         let params = self.read_func_params()?;
         Ok(Type::NonMemberFunction(
             calling_conv,
@@ -1507,12 +1533,13 @@ impl<'a> Serializer<'a> {
             }
             Type::MemberFunctionPointer(ref symbol, _, calling_conv, _, _, ref inner) => {
                 self.write_pre(inner)?;
-                self.write_calling_conv(calling_conv)?;
                 self.write_space()?;
                 write!(self.w, "(")?;
+                self.write_calling_conv(calling_conv)?;
+                self.write_space()?;
                 self.write_space()?;
                 self.write_name(symbol, None)?;
-                write!(self.w, "::*)")?;
+                write!(self.w, "::*")?;
                 return Ok(());
             }
             Type::NonMemberFunction(calling_conv, _, _, ref inner) => {
@@ -1789,20 +1816,19 @@ impl<'a> Serializer<'a> {
                 self.write_types(&params.types)?;
                 write!(self.w, ")")?;
 
-                self.write_post(return_type)?;
-
                 self.write_memfn_qualifiers(sc)?;
+                self.write_post(return_type)?;
             }
             Type::MemberFunctionPointer(_, _, _, ref params, sc, ref return_type) => {
-                write!(self.w, "(")?;
+                write!(self.w, ")(")?;
                 self.write_types(&params.types)?;
                 write!(self.w, ")")?;
 
                 self.write_post(return_type)?;
 
                 if sc.contains(StorageClass::CONST) {
-                    write!(self.w, "const")?;
                     self.write_space()?;
+                    write!(self.w, "const")?;
                 }
             }
             Type::CXXVBTable(ref names, _sc) => {
