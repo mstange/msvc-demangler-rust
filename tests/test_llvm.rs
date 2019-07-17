@@ -107,3 +107,8 @@ fn test_llvm_ms_basic() {
 fn test_llvm_ms_operators() {
     llvm_test!("llvm-cases/ms-operators.test");
 }
+
+#[test]
+fn test_llvm_ms_windows() {
+    llvm_test!("llvm-cases/ms-windows.test");
+}
