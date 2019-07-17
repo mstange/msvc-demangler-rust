@@ -18,7 +18,8 @@ fn main() {
     let print_demangled = |sym: &str| {
         let parsed = match msvc_demangler::parse(&sym) {
             Ok(parsed) => parsed,
-            Err(_) => {
+            Err(err) => {
+                eprintln!("error: {}", err);
                 println!("{}", sym);
                 return;
             }
@@ -30,7 +31,10 @@ fn main() {
         let demangled = msvc_demangler::serialize(&parsed, flags);
         match demangled {
             Ok(ref string) => println!("{}", string),
-            _ => println!("{}", sym),
+            Err(err) => {
+                eprintln!("error: {}", err);
+                println!("{}", sym);
+            }
         }
     };
 

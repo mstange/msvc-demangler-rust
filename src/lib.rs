@@ -23,67 +23,123 @@
 //! This msvc-demangler is dual licensed under the MIT and the University of
 //! Illinois Open Source Licenses.
 
+#![deny(missing_debug_implementations)]
+#![deny(unsafe_code)]
+
 #[macro_use]
 extern crate bitflags;
 
+use std::borrow::Cow;
 use std::cmp::min;
+use std::error;
 use std::fmt;
+use std::io;
 use std::io::Write;
 use std::mem;
 use std::result;
 use std::str;
+use std::str::Utf8Error;
+use std::string::FromUtf8Error;
 
-#[derive(Debug, Clone, PartialEq)]
 pub struct Error {
-    s: String,
+    repr: ErrorRepr,
+}
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt::Debug::fmt(&self.repr, f)
+    }
+}
+
+#[derive(Debug)]
+pub enum ErrorRepr {
+    FromUtf8(FromUtf8Error),
+    Utf8(Utf8Error),
+    Io(io::Error),
+    ParseError(Cow<'static, str>, String, usize),
+    Other(String),
 }
 
 impl Error {
-    fn new(s: String) -> Error {
-        Error { s }
-    }
-}
-
-impl From<std::str::Utf8Error> for Error {
-    fn from(t: std::str::Utf8Error) -> Error {
+    /// Creates a simple error message.
+    pub fn new<S: Into<String>>(s: S) -> Error {
         Error {
-            s: format!("{:?}", t),
+            repr: ErrorRepr::Other(s.into()),
         }
     }
-}
 
-impl From<std::string::FromUtf8Error> for Error {
-    fn from(t: std::string::FromUtf8Error) -> Error {
+    fn new_parse_error(s: Cow<'static, str>, input: &str, offset: usize) -> Error {
+        let context = Cow::Borrowed(input.as_bytes().get(offset..).unwrap_or(&[]));
+        let context = if context.len() > 20 {
+            Cow::Owned(format!("{}...", String::from_utf8_lossy(&context[..20])))
+        } else {
+            String::from_utf8_lossy(&context)
+        };
         Error {
-            s: format!("{:?}", t),
+            repr: ErrorRepr::ParseError(s, context.to_string(), offset),
+        }
+    }
+
+    /// Returns the offset in the input where the error happened.
+    pub fn offset(&self) -> Option<usize> {
+        match self.repr {
+            ErrorRepr::ParseError(_, _, offset) => Some(offset),
+            _ => None,
         }
     }
 }
 
-#[derive(Debug, Clone)]
-struct SerializeError {
-    s: String,
-}
-
-impl From<std::str::Utf8Error> for SerializeError {
-    fn from(err: std::str::Utf8Error) -> SerializeError {
-        SerializeError {
-            s: format!("{:?}", err),
+impl From<Utf8Error> for Error {
+    fn from(err: Utf8Error) -> Error {
+        Error {
+            repr: ErrorRepr::Utf8(err),
         }
     }
 }
 
-impl From<std::io::Error> for SerializeError {
-    fn from(err: std::io::Error) -> SerializeError {
-        SerializeError {
-            s: format!("{:?}", err),
+impl From<FromUtf8Error> for Error {
+    fn from(err: FromUtf8Error) -> Error {
+        Error {
+            repr: ErrorRepr::FromUtf8(err),
         }
     }
 }
 
-type SerializeResult<T> = result::Result<T, SerializeError>;
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Error {
+        Error {
+            repr: ErrorRepr::Io(err),
+        }
+    }
+}
 
-pub type Result<T> = result::Result<T, Error>;
+impl error::Error for Error {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self.repr {
+            ErrorRepr::FromUtf8(ref e) => Some(&*e),
+            ErrorRepr::Utf8(ref e) => Some(&*e),
+            ErrorRepr::Io(ref e) => Some(&*e),
+            ErrorRepr::ParseError(..) => None,
+            ErrorRepr::Other(_) => None,
+        }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.repr {
+            ErrorRepr::FromUtf8(ref e) => fmt::Display::fmt(e, f),
+            ErrorRepr::Utf8(ref e) => fmt::Display::fmt(e, f),
+            ErrorRepr::Io(ref e) => fmt::Display::fmt(e, f),
+            ErrorRepr::ParseError(ref msg, ref context, offset) => {
+                write!(f, "{} (offset: {}, remaining: {:?})", msg, offset, context)
+            }
+            ErrorRepr::Other(ref msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+type Result<T> = result::Result<T, Error>;
 
 bitflags! {
     pub struct StorageClass: u32 {
@@ -401,7 +457,13 @@ pub struct ParseResult<'a> {
 struct ParserState<'a> {
     // Mangled symbol. read_* functions shorten this string
     // as they parse it.
-    input: &'a [u8],
+    remaining: &'a [u8],
+
+    // The original input
+    input: &'a str,
+
+    // how many bytes we advanced
+    offset: usize,
 
     // The first 10 names in a mangled name can be back-referenced by
     // special name @[0-9]. This is a storage for the first 10 names.
@@ -411,23 +473,31 @@ struct ParserState<'a> {
 }
 
 impl<'a> ParserState<'a> {
+    fn fail(&self, s: &'static str) -> Error {
+        Error::new_parse_error(Cow::Borrowed(s), self.input, self.offset)
+    }
+
+    fn fail_args(&self, args: fmt::Arguments) -> Error {
+        Error::new_parse_error(Cow::Owned(format!("{}", args)), self.input, self.offset)
+    }
+
     fn parse(&mut self) -> Result<ParseResult<'a>> {
         // MSVC-style mangled symbols must start with b'?'.
         if !self.consume(b"?") {
-            return Err(Error::new("does not start with b'?'".to_owned()));
+            return Err(self.fail("does not start with b'?'"));
         }
 
         if self.consume(b"$") {
             if self.consume(b"TSS") {
                 let mut guard_num: i32 = i32::from(
                     self.consume_digit()
-                        .ok_or_else(|| Error::new("missing digit".to_owned()))?,
+                        .ok_or_else(|| self.fail("missing digit"))?,
                 );
                 while !self.consume(b"@") {
                     guard_num = guard_num * 10
                         + i32::from(
                             self.consume_digit()
-                                .ok_or_else(|| Error::new("missing digit".to_owned()))?,
+                                .ok_or_else(|| self.fail("missing digit"))?,
                         );
                 }
                 let name = self.read_nested_name()?;
@@ -501,7 +571,7 @@ impl<'a> ParserState<'a> {
                         b'0' => 1, // char
                         b'1' => 2, // wchar_t
                         _ => {
-                            return Err(Error::new("unknown string character type".to_owned()));
+                            return Err(self.fail("unknown string character type"));
                         }
                     };
                     self.read_encoded_string(char_bytes)?
@@ -528,11 +598,11 @@ impl<'a> ParserState<'a> {
                         };
                         let ref_qualifiers = match self.peek() {
                             Some(b'G') => {
-                                self.expect(b"G").unwrap();
+                                self.expect(b"G")?;
                                 StorageClass::LVALUE_QUAL
                             }
                             Some(b'H') => {
-                                self.expect(b"H").unwrap();
+                                self.expect(b"H")?;
                                 StorageClass::RVALUE_QUAL
                             }
                             _ => StorageClass::empty(),
@@ -566,48 +636,47 @@ impl<'a> ParserState<'a> {
     }
 
     fn peek(&self) -> Option<u8> {
-        self.input.first().cloned()
+        self.remaining.first().cloned()
     }
 
     fn get(&mut self) -> Result<u8> {
         match self.peek() {
             Some(first) => {
-                self.trim(1);
+                self.advance(1);
                 Ok(first)
             }
-            None => {panic!("Unexpected end of input");}// Err(Error::new("unexpected end of input".to_owned())),
+            None => Err(self.fail("unexpected end of input")),
         }
     }
 
     fn consume(&mut self, s: &[u8]) -> bool {
-        if self.input.starts_with(s) {
-            self.trim(s.len());
+        if self.remaining.starts_with(s) {
+            self.advance(s.len());
             true
         } else {
             false
         }
     }
 
-    fn trim(&mut self, len: usize) {
-        self.input = &self.input[len..]
+    fn advance(&mut self, len: usize) {
+        let new_remaining = self.remaining.get(len..).unwrap_or(&[]);
+        self.offset += self.remaining.len() - new_remaining.len();
+        self.remaining = new_remaining;
     }
 
     fn expect(&mut self, s: &[u8]) -> Result<()> {
         if !self.consume(s) {
-            return Err(Error::new(format!(
-                "{} expected, but got {}",
-                str::from_utf8(s)?,
-                str::from_utf8(self.input)?
-            )));
+            Err(self.fail_args(format_args!("{} expected", str::from_utf8(s)?,)))
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 
     fn consume_digit(&mut self) -> Option<u8> {
         match self.peek() {
             Some(first) => {
                 if char::from(first).is_digit(10) {
-                    self.trim(1);
+                    self.advance(1);
                     Some(first - b'0')
                 } else {
                     None
@@ -621,7 +690,7 @@ impl<'a> ParserState<'a> {
         match self.peek() {
             Some(first) => {
                 if char::from(first).is_digit(16) {
-                    self.trim(1);
+                    self.advance(1);
                     true
                 } else {
                     false
@@ -658,7 +727,7 @@ impl<'a> ParserState<'a> {
                             high << 4 | low
                         }
                         _ => {
-                            return Err(Error::new(format!(
+                            return Err(self.fail_args(format_args!(
                                 "unknown escaped encoded string character {}",
                                 char::from(c)
                             )));
@@ -666,7 +735,7 @@ impl<'a> ParserState<'a> {
                     }
                 }
                 _ => {
-                    return Err(Error::new(format!(
+                    return Err(self.fail_args(format_args!(
                         "unknown escaped encoded string character {}",
                         char::from(c)
                     )));
@@ -697,13 +766,12 @@ impl<'a> ParserState<'a> {
             return Ok(if neg { -i32::from(ret) } else { i32::from(ret) });
         }
 
-        let orig = self.input;
         let mut i = 0;
         let mut ret = 0;
-        for c in self.input {
+        for c in self.remaining {
             match *c {
                 b'@' => {
-                    self.trim(i + 1);
+                    self.advance(i + 1);
                     return Ok(if neg { -(ret as i32) } else { ret as i32 });
                 }
                 b'A'...b'P' => {
@@ -711,22 +779,21 @@ impl<'a> ParserState<'a> {
                     i += 1;
                 }
                 _ => {
-                    return Err(Error::new(format!("bad number: {}", str::from_utf8(orig)?)));
+                    return Err(self.fail("bad number"));
                 }
             }
         }
-        Err(Error::new(format!("bad number: {}", str::from_utf8(orig)?)))
+        Err(self.fail("bad number"))
     }
 
     // Read until the next b'@'.
     fn read_string(&mut self) -> Result<&'a [u8]> {
-        if let Some(pos) = self.input.iter().position(|&x| x == b'@') {
-            let ret = &self.input[0..pos];
-            self.trim(pos + 1);
+        if let Some(pos) = self.remaining.iter().position(|&x| x == b'@') {
+            let ret = &self.remaining[0..pos];
+            self.advance(pos + 1);
             Ok(ret)
         } else {
-            let error = format!("read_string: missing b'@': {}", str::from_utf8(self.input)?);
-            Err(Error::new(error))
+            Err(self.fail("read_string: missing b'@'"))
         }
     }
 
@@ -759,14 +826,10 @@ impl<'a> ParserState<'a> {
     }
 
     fn read_nested_name(&mut self) -> Result<Name<'a>> {
-        let orig = self.input;
         let name = if let Some(i) = self.consume_digit() {
             let i = i as usize;
             if i >= self.memorized_names.len() {
-                return Err(Error::new(format!(
-                    "name reference too large: {}",
-                    str::from_utf8(orig)?
-                )));
+                return Err(self.fail("name reference too large"));
             }
             self.memorized_names[i].clone()
         } else if self.consume(b"?") {
@@ -801,14 +864,10 @@ impl<'a> ParserState<'a> {
     }
 
     fn read_unqualified_name(&mut self, function: bool) -> Result<Name<'a>> {
-        let orig = self.input;
         let name = if let Some(i) = self.consume_digit() {
             let i = i as usize;
             if i >= self.memorized_names.len() {
-                return Err(Error::new(format!(
-                    "name reference too large: {}",
-                    str::from_utf8(orig)?
-                )));
+                return Err(self.fail("name reference too large"));
             }
             self.memorized_names[i].clone()
         } else if self.consume(b"?$") {
@@ -872,8 +931,6 @@ impl<'a> ParserState<'a> {
     }
 
     fn read_operator_name(&mut self) -> Result<Operator<'a>> {
-        let orig = self.input;
-
         Ok(match self.get()? {
             b'0' => Operator::Ctor,
             b'1' => Operator::Dtor,
@@ -962,10 +1019,7 @@ impl<'a> ParserState<'a> {
                         b'3' => Operator::RTTIClassHierarchyDescriptor,
                         b'4' => Operator::RTTIClassCompleteObjectLocator,
                         _ => {
-                            return Err(Error::new(format!(
-                                "unknown RTTI Operator name: {}",
-                                str::from_utf8(&[c])?
-                            )));
+                            return Err(self.fail("unknown RTTI Operator name"));
                         }
                     }
                 }
@@ -987,24 +1041,15 @@ impl<'a> ParserState<'a> {
                     } else if self.consume(b"K") {
                         Operator::LiteralOperatorName // TODO: read <source-name>, that's the operator name
                     } else {
-                        return Err(Error::new(format!(
-                            "unknown operator name: {}",
-                            str::from_utf8(orig)?
-                        )));
+                        return Err(self.fail("unknown operator name"));
                     }
                 }
                 _ => {
-                    return Err(Error::new(format!(
-                        "unknown operator name: {}",
-                        str::from_utf8(orig)?
-                    )))
+                    return Err(self.fail("unknown operator name"));
                 }
             },
             _ => {
-                return Err(Error::new(format!(
-                    "unknown operator name: {}",
-                    str::from_utf8(orig)?
-                )))
+                return Err(self.fail("unknown operator name"));
             }
         })
     }
@@ -1050,10 +1095,7 @@ impl<'a> ParserState<'a> {
             b'Y' => FuncClass::GLOBAL,
             b'Z' => FuncClass::GLOBAL | FuncClass::FAR,
             _ => {
-                return Err(Error::new(format!(
-                    "unknown func class: {}",
-                    str::from_utf8(&[c])?
-                )))
+                return Err(self.fail("unknown func class"));
             }
         })
     }
@@ -1066,13 +1108,11 @@ impl<'a> ParserState<'a> {
             Some(b'D') => StorageClass::CONST | StorageClass::VOLATILE,
             _ => return StorageClass::empty(),
         };
-        self.trim(1);
+        self.advance(1);
         access_class
     }
 
     fn read_calling_conv(&mut self) -> Result<CallingConv> {
-        let orig = self.input;
-
         Ok(match self.get()? {
             b'A' => CallingConv::Cdecl,
             b'B' => CallingConv::Cdecl,
@@ -1081,10 +1121,7 @@ impl<'a> ParserState<'a> {
             b'G' => CallingConv::Stdcall,
             b'I' => CallingConv::Fastcall,
             _ => {
-                return Err(Error::new(format!(
-                    "unknown calling conv: {}",
-                    str::from_utf8(orig)?
-                )))
+                return Err(self.fail("unknown calling conv"));
             }
         })
     }
@@ -1115,7 +1152,7 @@ impl<'a> ParserState<'a> {
             Some(b'T') => StorageClass::CONST | StorageClass::VOLATILE,
             _ => return StorageClass::empty(),
         };
-        self.trim(1);
+        self.advance(1);
         storage_class
     }
 
@@ -1123,7 +1160,6 @@ impl<'a> ParserState<'a> {
         if !self.consume(b"?") {
             return Ok(StorageClass::empty());
         }
-        let orig = self.input;
 
         Ok(match self.get()? {
             b'A' => StorageClass::empty(),
@@ -1131,10 +1167,7 @@ impl<'a> ParserState<'a> {
             b'C' => StorageClass::VOLATILE,
             b'D' => StorageClass::CONST | StorageClass::VOLATILE,
             _ => {
-                return Err(Error::new(format!(
-                    "unknown storage class: {}",
-                    str::from_utf8(orig)?
-                )))
+                return Err(self.fail("unknown storage class"));
             }
         })
     }
@@ -1218,7 +1251,7 @@ impl<'a> ParserState<'a> {
                 match x {
                     // Inheritance specifiers, which we don't need to remember.
                     b'1' | b'H' | b'I' | b'J' => {
-                        self.trim(1);
+                        self.advance(1);
                         self.expect(b"?")?;
                         return self.read_member_function_pointer(false);
                     }
@@ -1234,13 +1267,11 @@ impl<'a> ParserState<'a> {
 
         if let Some(n) = self.consume_digit() {
             if n as usize >= self.memorized_types.len() {
-                return Err(Error::new(format!("invalid backreference: {}", n)));
+                return Err(self.fail_args(format_args!("invalid backreference: {}", n)));
             }
 
             return Ok(self.memorized_types[n as usize].clone());
         }
-
-        let orig = self.input;
 
         Ok(match self.get()? {
             b'T' => Type::Union(self.read_name(false)?, sc),
@@ -1278,17 +1309,11 @@ impl<'a> ParserState<'a> {
                 b'S' => Type::Char16(sc),
                 b'U' => Type::Char32(sc),
                 _ => {
-                    return Err(Error::new(format!(
-                        "unknown primitive type: {}",
-                        str::from_utf8(orig)?
-                    )))
+                    return Err(self.fail("unknown primitive type"));
                 }
             },
             _ => {
-                return Err(Error::new(format!(
-                    "unknown primitive type: {}",
-                    str::from_utf8(orig)?
-                )))
+                return Err(self.fail("unknown primitive type: {}"));
             }
         })
     }
@@ -1302,10 +1327,7 @@ impl<'a> ParserState<'a> {
     fn read_array(&mut self) -> Result<Type<'a>> {
         let dimension = self.read_number()?;
         if dimension <= 0 {
-            return Err(Error::new(format!(
-                "invalid array dimension: {}",
-                dimension
-            )));
+            return Err(self.fail_args(format_args!("invalid array dimension: {}", dimension)));
         }
         let (array, _) = self.read_nested_array(dimension)?;
         Ok(array)
@@ -1326,10 +1348,7 @@ impl<'a> ParserState<'a> {
                 } else if self.consume(b"C") || self.consume(b"D") {
                     StorageClass::CONST | StorageClass::VOLATILE
                 } else if !self.consume(b"A") {
-                    return Err(Error::new(format!(
-                        "unknown storage class: {}",
-                        str::from_utf8(self.input)?
-                    )));
+                    return Err(self.fail("unknown storage class"));
                 } else {
                     StorageClass::empty()
                 }
@@ -1349,26 +1368,26 @@ impl<'a> ParserState<'a> {
 
         let mut params: Vec<Type<'a>> = Vec::new();
 
-        while !self.input.starts_with(b"@")
-            && !self.input.starts_with(b"Z")
-            && !self.input.is_empty()
+        while !self.remaining.starts_with(b"@")
+            && !self.remaining.starts_with(b"Z")
+            && !self.remaining.is_empty()
         {
             if let Some(n) = self.consume_digit() {
                 if n as usize >= self.memorized_types.len() {
-                    return Err(Error::new(format!("invalid backreference: {}", n)));
+                    return Err(self.fail_args(format_args!("invalid backreference: {}", n)));
                 }
                 // println!("reading a type from memorized_types[{}]. full list: {:#?}", n, self.memorized_types);
                 params.push(self.memorized_types[n as usize].clone());
                 continue;
             }
 
-            let len = self.input.len();
+            let len = self.remaining.len();
 
             let param_type = self.read_var_type(StorageClass::empty())?;
 
             // Single-letter types are ignored for backreferences because
             // memorizing them doesn't save anything.
-            if len - self.input.len() > 1 {
+            if len - self.remaining.len() > 1 {
                 self.memorize_type(&param_type);
             }
             params.push(param_type);
@@ -1376,7 +1395,7 @@ impl<'a> ParserState<'a> {
 
         if self.consume(b"Z") {
             params.push(Type::VarArgs);
-        } else if self.input.is_empty() {
+        } else if self.remaining.is_empty() {
             // this is needed to handle the weird standalone template manglings
         } else {
             self.expect(b"@")?;
@@ -1406,7 +1425,9 @@ pub fn demangle(input: &str, flags: DemangleFlags) -> Result<String> {
 
 pub fn parse(input: &str) -> Result<ParseResult> {
     let mut state = ParserState {
-        input: input.as_bytes(),
+        remaining: input.as_bytes(),
+        input,
+        offset: 0,
         memorized_names: Vec::with_capacity(10),
         memorized_types: Vec::with_capacity(10),
     };
@@ -1417,7 +1438,7 @@ pub fn serialize(input: &ParseResult, flags: DemangleFlags) -> Result<String> {
     let mut s = Vec::new();
     {
         let mut serializer = Serializer { flags, w: &mut s };
-        serializer.serialize(&input).unwrap();
+        serializer.serialize(&input)?;
     }
     Ok(String::from_utf8(s)?)
 }
@@ -1445,7 +1466,7 @@ struct Serializer<'a> {
 }
 
 impl<'a> Serializer<'a> {
-    fn serialize(&mut self, parse_result: &ParseResult) -> SerializeResult<()> {
+    fn serialize(&mut self, parse_result: &ParseResult) -> Result<()> {
         if !self
             .flags
             .intersects(DemangleFlags::NAME_ONLY | DemangleFlags::NO_FUNCTION_RETURNS)
@@ -1459,7 +1480,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_calling_conv(&mut self, calling_conv: CallingConv) -> SerializeResult<()> {
+    fn write_calling_conv(&mut self, calling_conv: CallingConv) -> Result<()> {
         match self.w.last() {
             Some(b' ') | Some(b'(') => {}
             _ => write!(self.w, " ")?,
@@ -1489,7 +1510,7 @@ impl<'a> Serializer<'a> {
     }
 
     // Write the "first half" of a given type.
-    fn write_pre(&mut self, t: &Type) -> SerializeResult<()> {
+    fn write_pre(&mut self, t: &Type) -> Result<()> {
         let storage_class = match *t {
             Type::None => return Ok(()),
             Type::MemberFunction(func_class, calling_conv, _, _, ref inner) => {
@@ -1770,13 +1791,13 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_memfn_qualifiers(&mut self, sc: StorageClass) -> SerializeResult<()> {
+    fn write_memfn_qualifiers(&mut self, sc: StorageClass) -> Result<()> {
         if self.flags.contains(DemangleFlags::NO_THISTYPE) {
             // TODO: should probably check for NO_CV_THISTYPE and NO_MS_THISTYPE
             // separately but I don't know what exactly those affect.
             return Ok(());
         }
-        let mut write_one_qual = |flag, s| -> SerializeResult<()> {
+        let mut write_one_qual = |flag, s| -> Result<()> {
             if sc.contains(flag) {
                 self.write_space()?;
                 self.w.write_all(s)?;
@@ -1796,7 +1817,7 @@ impl<'a> Serializer<'a> {
     }
 
     // Write the "second half" of a given type.
-    fn write_post(&mut self, t: &Type) -> SerializeResult<()> {
+    fn write_post(&mut self, t: &Type) -> Result<()> {
         match *t {
             Type::MemberFunction(_, _, ref params, sc, ref return_type)
             | Type::NonMemberFunction(_, ref params, sc, ref return_type) => {
@@ -1861,7 +1882,7 @@ impl<'a> Serializer<'a> {
     }
 
     // Write a function or template parameter list.
-    fn write_types(&mut self, types: &[Type]) -> SerializeResult<()> {
+    fn write_types(&mut self, types: &[Type]) -> Result<()> {
         for (idx, param) in types
             .iter()
             .filter(|x| **x != Type::EmptyParameterPack)
@@ -1879,7 +1900,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_class(&mut self, names: &Symbol, s: &str) -> SerializeResult<()> {
+    fn write_class(&mut self, names: &Symbol, s: &str) -> Result<()> {
         if !self.flags.contains(DemangleFlags::NO_CLASS_TYPE) {
             write!(self.w, "{}", s)?;
             write!(self.w, " ")?;
@@ -1888,7 +1909,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_space_pre(&mut self) -> SerializeResult<()> {
+    fn write_space_pre(&mut self) -> Result<()> {
         if let Some(&c) = self.w.last() {
             if char::from(c).is_ascii_alphabetic() || c == b'&' || c == b'>' || c == b')' {
                 write!(self.w, " ")?;
@@ -1897,7 +1918,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_space_ptr(&mut self) -> SerializeResult<()> {
+    fn write_space_ptr(&mut self) -> Result<()> {
         if let Some(&c) = self.w.last() {
             if char::from(c).is_ascii_alphabetic() || c == b'>' || c == b')' {
                 write!(self.w, " ")?;
@@ -1906,7 +1927,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_space(&mut self) -> SerializeResult<()> {
+    fn write_space(&mut self) -> Result<()> {
         if let Some(&c) = self.w.last() {
             if char::from(c).is_ascii_alphabetic()
                 || c == b'*'
@@ -1920,7 +1941,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_operator_name(&mut self, op: &Operator) -> SerializeResult<()> {
+    fn write_operator_name(&mut self, op: &Operator) -> Result<()> {
         let s = match *op {
             Operator::Ctor => "ctor",
             Operator::Dtor => "dtor",
@@ -2030,7 +2051,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_one_name(&mut self, name: &Name) -> SerializeResult<()> {
+    fn write_one_name(&mut self, name: &Name) -> Result<()> {
         match *name {
             Name::Operator(ref op) => {
                 self.write_space()?;
@@ -2047,7 +2068,7 @@ impl<'a> Serializer<'a> {
                 write!(self.w, "`{}'", val)?;
             }
             Name::ParsedName(ref val) => {
-                write!(self.w, "`{}'", serialize(val, self.flags).unwrap())?;
+                write!(self.w, "`{}'", serialize(val, self.flags)?)?;
             }
             Name::AnonymousNamespace => {
                 write!(self.w, "`anonymous namespace'")?;
@@ -2056,7 +2077,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_scope(&mut self, names: &NameSequence) -> SerializeResult<()> {
+    fn write_scope(&mut self, names: &NameSequence) -> Result<()> {
         // Print out namespaces or outer class names.
         let mut i = names.names.iter().rev();
         if let Some(name) = i.next() {
@@ -2070,7 +2091,7 @@ impl<'a> Serializer<'a> {
     }
 
     // Write a name read by read_name().
-    fn write_name(&mut self, names: &Symbol, ty: Option<&Type<'_>>) -> SerializeResult<()> {
+    fn write_name(&mut self, names: &Symbol, ty: Option<&Type<'_>>) -> Result<()> {
         if !self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
             self.write_space_pre()?;
         } else {
@@ -2094,15 +2115,19 @@ impl<'a> Serializer<'a> {
             Name::Operator(ref op) => {
                 match *op {
                     Operator::Ctor => {
-                        let prev = names.scope.names.iter().next().expect(
-                            "If there's a ctor, there should be another name in this sequence",
-                        );
+                        let prev = names.scope.names.iter().next().ok_or_else(|| {
+                            Error::new(
+                                "If there's a ctor, there should be another name in this sequence",
+                            )
+                        })?;
                         self.write_one_name(prev)?;
                     }
                     Operator::Dtor => {
-                        let prev = names.scope.names.iter().next().expect(
-                            "If there's a dtor, there should be another name in this sequence",
-                        );
+                        let prev = names.scope.names.iter().next().ok_or_else(|| {
+                            Error::new(
+                                "If there's a dtor, there should be another name in this sequence",
+                            )
+                        })?;
                         write!(self.w, "~")?;
                         self.write_one_name(prev)?;
                     }
@@ -2140,16 +2165,17 @@ impl<'a> Serializer<'a> {
                 write!(self.w, "`{}'", val)?;
             }
             Name::ParsedName(ref val) => {
-                write!(self.w, "{}", serialize(val, self.flags).unwrap())?;
+                write!(self.w, "{}", serialize(val, self.flags)?)?;
             }
             Name::AnonymousNamespace => {
-                panic!("not supposed to be here");
+                // this should never happen as they are handled elsewhere
+                debug_assert!(false, "not supposed to be here");
             }
         }
         Ok(())
     }
 
-    fn write_tmpl_params<'b>(&mut self, params: &Params<'b>) -> SerializeResult<()> {
+    fn write_tmpl_params<'b>(&mut self, params: &Params<'b>) -> Result<()> {
         write!(self.w, "<")?;
         if !params.types.is_empty() {
             self.write_types(&params.types)?;
