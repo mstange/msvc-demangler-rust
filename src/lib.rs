@@ -241,7 +241,6 @@ bitflags! {
 // The kind of variable storage. In LLVM this is called storage class.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum VarStorageKind {
-    None,
     PrivateStatic,
     ProtectedStatic,
     PublicStatic,
@@ -328,7 +327,7 @@ pub enum Operator<'a> {
     VBTable,
     VCall,
     Typeof,
-    LocalStaticGuard,
+    LocalStaticGuard(Option<u32>),
     String,
     VBaseDtor,
     VectorDeletingDtor,
@@ -361,7 +360,7 @@ pub enum Operator<'a> {
 
     DynamicInitializer,
     DynamicAtexitDtor,
-    LocalStaticThreadGuard,
+    LocalStaticThreadGuard(Option<u32>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -520,11 +519,30 @@ impl<'a> ParserState<'a> {
 
         // What follows is a main symbol name. This may include
         // namespaces or class names.
-        let symbol = self.read_name(true)?;
+        let mut symbol = self.read_name(true)?;
+
+        // Special case for some weird cases where extra data is tacked on
+        // after the main symbol but belongs into the symbol.
+        match symbol.name {
+            Name::Operator(Operator::LocalStaticGuard(ref mut scope_index))
+            | Name::Operator(Operator::LocalStaticThreadGuard(ref mut scope_index)) => {
+                let _is_visible = if self.consume(b"4IA") {
+                    false
+                } else if self.consume(b"5") {
+                    true
+                } else {
+                    return Err(self.fail("unexpected local guard marker"));
+                };
+                if !self.remaining.is_empty() {
+                    *scope_index = Some(self.read_unsigned()?);
+                };
+            }
+            _ => {}
+        }
 
         if let Ok(c) = self.get() {
             let symbol_type = match c {
-                b'0'...b'5' => {
+                b'0'...b'4' => {
                     // Read a variable.
                     let kind = match c {
                         b'0' => VarStorageKind::PrivateStatic,
@@ -532,7 +550,7 @@ impl<'a> ParserState<'a> {
                         b'2' => VarStorageKind::PublicStatic,
                         b'3' => VarStorageKind::Global,
                         b'4' => VarStorageKind::FunctionLocalStatic,
-                        _ => VarStorageKind::None,
+                        _ => unreachable!(),
                     };
                     let ty = self.read_var_type(StorageClass::empty())?;
                     let sc = self.read_storage_class();
@@ -786,6 +804,14 @@ impl<'a> ParserState<'a> {
         Err(self.fail("bad number"))
     }
 
+    fn read_unsigned(&mut self) -> Result<u32> {
+        let num = self.read_number()?;
+        if num < 0 {
+            return Err(self.fail("expected unsigned"));
+        }
+        Ok(num as u32)
+    }
+
     // Read until the next b'@'.
     fn read_string(&mut self) -> Result<&'a [u8]> {
         if let Some(pos) = self.remaining.iter().position(|&x| x == b'@') {
@@ -877,8 +903,7 @@ impl<'a> ParserState<'a> {
             }
             name
         } else if self.consume(b"?") {
-            // Overloaded operator.
-            self.read_operator()?
+            self.read_special_name()?
         } else {
             // Non-template functions or classes.
             let name = self.read_string()?;
@@ -926,12 +951,8 @@ impl<'a> ParserState<'a> {
         ))
     }
 
-    fn read_operator(&mut self) -> Result<Name<'a>> {
-        Ok(Name::Operator(self.read_operator_name()?))
-    }
-
-    fn read_operator_name(&mut self) -> Result<Operator<'a>> {
-        Ok(match self.get()? {
+    fn read_special_name(&mut self) -> Result<Name<'a>> {
+        Ok(Name::Operator(match self.get()? {
             b'0' => Operator::Ctor,
             b'1' => Operator::Dtor,
             b'2' => Operator::New,
@@ -980,7 +1001,7 @@ impl<'a> ParserState<'a> {
                 b'8' => Operator::VBTable,
                 b'9' => Operator::VCall,
                 b'A' => Operator::Typeof,
-                b'B' => Operator::LocalStaticGuard,
+                b'B' => Operator::LocalStaticGuard(None),
                 b'C' => Operator::String,
                 b'D' => Operator::VBaseDtor,
                 b'E' => Operator::VectorDeletingDtor,
@@ -1037,7 +1058,7 @@ impl<'a> ParserState<'a> {
                     } else if self.consume(b"F") {
                         Operator::DynamicAtexitDtor
                     } else if self.consume(b"J") {
-                        Operator::LocalStaticThreadGuard
+                        Operator::LocalStaticThreadGuard(None)
                     } else if self.consume(b"K") {
                         Operator::LiteralOperatorName // TODO: read <source-name>, that's the operator name
                     } else {
@@ -1051,7 +1072,7 @@ impl<'a> ParserState<'a> {
             _ => {
                 return Err(self.fail("unknown operator name"));
             }
-        })
+        }))
     }
 
     fn read_func_class(&mut self, c: u8) -> Result<FuncClass> {
@@ -1652,9 +1673,7 @@ impl<'a> Serializer<'a> {
                     VarStorageKind::PrivateStatic => write!(self.w, "private: static ")?,
                     VarStorageKind::ProtectedStatic => write!(self.w, "protected: static ")?,
                     VarStorageKind::PublicStatic => write!(self.w, "public: static ")?,
-                    VarStorageKind::Global
-                    | VarStorageKind::FunctionLocalStatic
-                    | VarStorageKind::None => {}
+                    VarStorageKind::Global | VarStorageKind::FunctionLocalStatic => {}
                 }
                 self.write_pre(inner)?;
                 sc
@@ -1994,7 +2013,13 @@ impl<'a> Serializer<'a> {
             Operator::VBTable => "`vbtable'",
             Operator::VCall => "`vcall'",
             Operator::Typeof => "`typeof'",
-            Operator::LocalStaticGuard => "`local static guard'",
+            Operator::LocalStaticGuard(scope) => {
+                write!(self.w, "`local static guard'")?;
+                if let Some(scope) = scope {
+                    write!(self.w, "{{{}}}", scope)?;
+                }
+                return Ok(());
+            }
             Operator::String => "`string'",
             Operator::VBaseDtor => "`vbase destructor'",
             Operator::VectorDeletingDtor => "`vector deleting destructor'",
@@ -2045,7 +2070,13 @@ impl<'a> Serializer<'a> {
 
             Operator::DynamicInitializer => "`dynamic initializer'",
             Operator::DynamicAtexitDtor => "`dynamic atexit destructor'",
-            Operator::LocalStaticThreadGuard => "`local static thread guard'",
+            Operator::LocalStaticThreadGuard(scope) => {
+                write!(self.w, "`local static thread guard'")?;
+                if let Some(scope) = scope {
+                    write!(self.w, "{{{}}}", scope)?;
+                }
+                return Ok(());
+            }
         };
         write!(self.w, "{}", s)?;
         Ok(())

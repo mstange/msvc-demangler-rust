@@ -149,9 +149,8 @@
 ??_9Base@@$B7AA
 ; CHECK: [thunk]: __cdecl Base::`vcall'{8, {flat}}
 
-; TODO(mitsuhiko): currently broken (invalid backreference)
-;??_B?1??getS@@YAAAUS@@XZ@51
-;; CHECK: `struct S & __cdecl getS(void)'::`2'::`local static guard'{2}
+??_B?1??getS@@YAAAUS@@XZ@51
+; CHECK: `struct S & __cdecl getS(void)'::`2'::`local static guard'{2}
 
 ; TODO(mitsuhiko): currently broken because no string decoding
 ;??_C@_02PCEFGMJL@hi?$AA@
@@ -247,9 +246,8 @@
 ;; CHECK: void __cdecl `dynamic atexit destructor for `private: static class std::vector<class antlr4::dfa::DFA, class std::allocator<class antlr4::dfa::DFA>> XPathLexer::_decisionToDFA''(void)
 ; CHECK: private: static class std::vector<class antlr4::dfa::DFA, class std::allocator<class antlr4::dfa::DFA> > XPathLexer::_decisionToDFA::`dynamic atexit destructor'
 
-;??__J?1??f@@YAAAUS@@XZ@51
-; TODO(mitsuhiko): completely broken (bad backref)
-;; CHECK: `struct S & __cdecl f(void)'::`2'::`local static thread guard'{2}
+??__J?1??f@@YAAAUS@@XZ@51
+; CHECK: `struct S & __cdecl f(void)'::`2'::`local static thread guard'{2}
 
 ??__K_deg@@YAHO@Z
 ; CHECK: int __cdecl operator ""_deg(long double)
