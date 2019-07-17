@@ -256,7 +256,7 @@ pub enum Name<'a> {
     Template(Box<Name<'a>>, Params<'a>),
     Discriminator(i32),
     ParsedName(Box<ParseResult<'a>>),
-    AnonymousNamespace,
+    AnonymousNamespace(Option<String>),
 }
 
 impl<'a> fmt::Debug for Name<'a> {
@@ -272,7 +272,9 @@ impl<'a> fmt::Debug for Name<'a> {
             }
             Name::Discriminator(i) => f.debug_tuple("Discriminator").field(&i).finish(),
             Name::ParsedName(ref res) => f.debug_tuple("ParsedName").field(res).finish(),
-            Name::AnonymousNamespace => f.debug_tuple("AnonymousNamespace").finish(),
+            Name::AnonymousNamespace(ref name) => {
+                f.debug_tuple("AnonymousNamespace").field(name).finish()
+            }
         }
     }
 }
@@ -489,13 +491,13 @@ impl<'a> ParserState<'a> {
         if self.consume(b"$") {
             if self.consume(b"TSS") {
                 let mut guard_num: i32 = i32::from(
-                    self.consume_digit()
+                    self.read_digit()
                         .ok_or_else(|| self.fail("missing digit"))?,
                 );
                 while !self.consume(b"@") {
                     guard_num = guard_num * 10
                         + i32::from(
-                            self.consume_digit()
+                            self.read_digit()
                                 .ok_or_else(|| self.fail("missing digit"))?,
                         );
                 }
@@ -690,7 +692,7 @@ impl<'a> ParserState<'a> {
         }
     }
 
-    fn consume_digit(&mut self) -> Option<u8> {
+    fn read_digit(&mut self) -> Option<u8> {
         match self.peek() {
             Some(first) => {
                 if char::from(first).is_digit(10) {
@@ -704,17 +706,17 @@ impl<'a> ParserState<'a> {
         }
     }
 
-    fn consume_hex_digit(&mut self) -> bool {
+    fn read_hex_digit(&mut self) -> Option<char> {
         match self.peek() {
             Some(first) => {
                 if char::from(first).is_digit(16) {
                     self.advance(1);
-                    true
+                    Some(first as char)
                 } else {
-                    false
+                    None
                 }
             }
-            None => false,
+            None => None,
         }
     }
 
@@ -779,7 +781,7 @@ impl<'a> ParserState<'a> {
     fn read_number(&mut self) -> Result<i32> {
         let neg = self.consume(b"?");
 
-        if let Some(digit) = self.consume_digit() {
+        if let Some(digit) = self.read_digit() {
             let ret = digit + 1;
             return Ok(if neg { -i32::from(ret) } else { i32::from(ret) });
         }
@@ -852,7 +854,7 @@ impl<'a> ParserState<'a> {
     }
 
     fn read_nested_name(&mut self) -> Result<Name<'a>> {
-        let name = if let Some(i) = self.consume_digit() {
+        let name = if let Some(i) = self.read_digit() {
             let i = i as usize;
             if i >= self.memorized_names.len() {
                 return Err(self.fail("name reference too large"));
@@ -867,12 +869,22 @@ impl<'a> ParserState<'a> {
                         self.memorize_name(&name);
                         name
                     } else if self.consume(b"A") {
-                        // A__cdecl *instanc'onymous namespace.
-                        if self.consume(b"0x") {
-                            while self.consume_hex_digit() {}
-                        }
+                        let id = if self.consume(b"0x") {
+                            let mut name = String::from("0x");
+                            while let Some(c) = self.read_hex_digit() {
+                                name.push(c);
+                            }
+                            Some(name)
+                        } else {
+                            None
+                        };
                         self.expect(b"@")?;
-                        Name::AnonymousNamespace
+                        let memorize = id.is_some();
+                        let name = Name::AnonymousNamespace(id);
+                        if memorize {
+                            self.memorize_name(&name);
+                        }
+                        name
                     } else {
                         let discriminator = self.read_number()?;
                         Name::Discriminator(discriminator)
@@ -890,7 +902,7 @@ impl<'a> ParserState<'a> {
     }
 
     fn read_unqualified_name(&mut self, function: bool) -> Result<Name<'a>> {
-        let name = if let Some(i) = self.consume_digit() {
+        let name = if let Some(i) = self.read_digit() {
             let i = i as usize;
             if i >= self.memorized_names.len() {
                 return Err(self.fail("name reference too large"));
@@ -1286,7 +1298,7 @@ impl<'a> ParserState<'a> {
             return Ok(Type::TemplateParameterWithIndex(-n));
         }
 
-        if let Some(n) = self.consume_digit() {
+        if let Some(n) = self.read_digit() {
             if n as usize >= self.memorized_types.len() {
                 return Err(self.fail_args(format_args!("invalid backreference: {}", n)));
             }
@@ -1393,7 +1405,7 @@ impl<'a> ParserState<'a> {
             && !self.remaining.starts_with(b"Z")
             && !self.remaining.is_empty()
         {
-            if let Some(n) = self.consume_digit() {
+            if let Some(n) = self.read_digit() {
                 if n as usize >= self.memorized_types.len() {
                     return Err(self.fail_args(format_args!("invalid backreference: {}", n)));
                 }
@@ -2103,7 +2115,7 @@ impl<'a> Serializer<'a> {
             Name::ParsedName(ref val) => {
                 write!(self.w, "`{}'", serialize(val, self.flags)?)?;
             }
-            Name::AnonymousNamespace => {
+            Name::AnonymousNamespace(_) => {
                 write!(self.w, "`anonymous namespace'")?;
             }
         }
@@ -2200,7 +2212,7 @@ impl<'a> Serializer<'a> {
             Name::ParsedName(ref val) => {
                 write!(self.w, "{}", serialize(val, self.flags)?)?;
             }
-            Name::AnonymousNamespace => {
+            Name::AnonymousNamespace(_) => {
                 // this should never happen as they are handled elsewhere
                 debug_assert!(false, "not supposed to be here");
             }
