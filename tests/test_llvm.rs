@@ -115,3 +115,8 @@ fn test_llvm_ms_operators() {
 fn test_llvm_ms_back_references() {
     llvm_test!("llvm-cases/ms-back-references.test");
 }
+
+#[test]
+fn test_llvm_ms_windows() {
+    llvm_test!("llvm-cases/ms-windows.test");
+}

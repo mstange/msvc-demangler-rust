@@ -1523,7 +1523,9 @@ impl<'a> Serializer<'a> {
                 CallingConv::Cdecl => {
                     write!(self.w, "__cdecl ")?;
                 }
-                CallingConv::Pascal => {}
+                CallingConv::Pascal => {
+                    write!(self.w, "__pascal ")?;
+                }
                 CallingConv::Thiscall => {
                     write!(self.w, "__thiscall ")?;
                 }
