@@ -85,7 +85,10 @@ macro_rules! llvm_test {
                 let demangled_fuzzy = demangled
                     .replace("constructor", "ctor")
                     .replace("destructor", "dtor")
-                    .replace("::`RTTI", " `RTTI");
+                    .replace("::`RTTI", " `RTTI")
+                    .replace("> > > >", ">>>>")
+                    .replace("> > >", ">>>")
+                    .replace("> >", ">>");
                 assert!(
                     demangled_fuzzy.contains(case.demangled_ref)
                         || demangled.contains(case.demangled_ref)
@@ -106,4 +109,14 @@ fn test_llvm_ms_basic() {
 #[test]
 fn test_llvm_ms_operators() {
     llvm_test!("llvm-cases/ms-operators.test");
+}
+
+#[test]
+fn test_llvm_ms_back_references() {
+    llvm_test!("llvm-cases/ms-back-references.test");
+}
+
+#[test]
+fn test_llvm_ms_windows() {
+    llvm_test!("llvm-cases/ms-windows.test");
 }
