@@ -437,6 +437,8 @@ pub enum Type<'a> {
     Ulong(StorageClass),
     Int64(StorageClass),
     Uint64(StorageClass),
+    Int128(StorageClass),
+    Uint128(StorageClass),
     Wchar(StorageClass),
     Char8(StorageClass),
     Char16(StorageClass),
@@ -1349,6 +1351,8 @@ impl<'a> ParserState<'a> {
                 b'N' => Type::Bool(sc),
                 b'J' => Type::Int64(sc),
                 b'K' => Type::Uint64(sc),
+                b'L' => Type::Int128(sc),
+                b'M' => Type::Uint128(sc),
                 b'W' => Type::Wchar(sc),
                 b'Q' => Type::Char8(sc),
                 b'S' => Type::Char16(sc),
@@ -1357,8 +1361,8 @@ impl<'a> ParserState<'a> {
                     return Err(self.fail("unknown primitive type"));
                 }
             },
-            _ => {
-                return Err(self.fail("unknown primitive type: {}"));
+            _c => {
+                return Err(self.fail("unknown primitive type"));
             }
         })
     }
@@ -1781,6 +1785,22 @@ impl<'a> Serializer<'a> {
                     write!(self.w, "unsigned __int64")?;
                 } else {
                     write!(self.w, "uint64_t")?;
+                }
+                sc
+            }
+            Type::Int128(sc) => {
+                if self.flags.contains(DemangleFlags::MS_TYPENAMES) {
+                    write!(self.w, "__int128")?;
+                } else {
+                    write!(self.w, "int128_t")?;
+                }
+                sc
+            }
+            Type::Uint128(sc) => {
+                if self.flags.contains(DemangleFlags::MS_TYPENAMES) {
+                    write!(self.w, "unsigned __int128")?;
+                } else {
+                    write!(self.w, "uint128_t")?;
                 }
                 sc
             }
