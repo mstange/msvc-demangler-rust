@@ -143,15 +143,15 @@ type Result<T> = result::Result<T, Error>;
 
 bitflags! {
     pub struct StorageClass: u32 {
-        const CONST       = 0b00000_0001;
-        const VOLATILE    = 0b00000_0010;
-        const FAR         = 0b00000_0100;
-        const HUGE        = 0b00000_1000;
-        const UNALIGNED   = 0b00001_0000;
-        const RESTRICT    = 0b00010_0000;
-        const PTR64       = 0b00100_0000;
-        const LVALUE_QUAL = 0b01000_0000;
-        const RVALUE_QUAL = 0b10000_0000;
+        const CONST       = 0b0_0000_0001;
+        const VOLATILE    = 0b0_0000_0010;
+        const FAR         = 0b0_0000_0100;
+        const HUGE        = 0b0_0000_1000;
+        const UNALIGNED   = 0b0_0001_0000;
+        const RESTRICT    = 0b0_0010_0000;
+        const PTR64       = 0b0_0100_0000;
+        const LVALUE_QUAL = 0b0_1000_0000;
+        const RVALUE_QUAL = 0b1_0000_0000;
     }
 }
 
