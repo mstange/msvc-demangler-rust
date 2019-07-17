@@ -828,5 +828,25 @@ fn upstream_tests() {
     expect(
         "??__FFLASH_TEMP_FILENAME@sandboxing@mozilla@@YAXXZ",
         "void __cdecl mozilla::sandboxing::FLASH_TEMP_FILENAME::`dynamic atexit destructor'(void)",
-    )
+    );
+    expect(
+        "??__J?1??f@@YAAAUS@@XZ@5BB@",
+        "`struct S & __cdecl f(void)'::`2'::`local static thread guard'{17}",
+    );
+    expect(
+        "??__J?@??f@@YAAAUS@@XZ@5BB@",
+        "`struct S & __cdecl f(void)'::`0'::`local static thread guard'{17}",
+    );
+    expect(
+        "??__J?A@??f@@YAAAUS@@XZ@5BB@",
+        "`struct S & __cdecl f(void)'::`anonymous namespace'::`local static thread guard'{17}",
+    );
+    expect(
+        "??__J?B@??f@@YAAAUS@@XZ@5BB@",
+        "`struct S & __cdecl f(void)'::`1'::`local static thread guard'{17}",
+    );
+    expect(
+        "??__J?@??f@@YAAAUS@@XZ@5BB@",
+        "`struct S & __cdecl f(void)'::`0'::`local static thread guard'{17}",
+    );
 }
