@@ -143,14 +143,15 @@ type Result<T> = result::Result<T, Error>;
 
 bitflags! {
     pub struct StorageClass: u32 {
-        const CONST       = 0b0000_0001;
-        const VOLATILE    = 0b0000_0010;
-        const FAR         = 0b0000_0100;
-        const HUGE        = 0b0000_1000;
-        const UNALIGNED   = 0b0001_0000;
-        const RESTRICT    = 0b0010_0000;
-        const LVALUE_QUAL = 0b0100_0000;
-        const RVALUE_QUAL = 0b1000_0000;
+        const CONST       = 0b00000_0001;
+        const VOLATILE    = 0b00000_0010;
+        const FAR         = 0b00000_0100;
+        const HUGE        = 0b00000_1000;
+        const UNALIGNED   = 0b00001_0000;
+        const RESTRICT    = 0b00010_0000;
+        const PTR64       = 0b00100_0000;
+        const LVALUE_QUAL = 0b01000_0000;
+        const RVALUE_QUAL = 0b10000_0000;
     }
 }
 
@@ -201,6 +202,9 @@ bitflags! {
         const HUG_TYPE = 0x40_0000;
         /// Insert a space before pointers.
         const SPACE_BEFORE_POINTER = 0x80_0000;
+        /// Add ptr64 to output.  This is disabled by default because it's also not
+        /// added by LLVM.  This is in a way the inverse of the DIA `UNDNAME_NO_PTR64`
+        const WITH_PTR64 = 0x100_000;
     }
 }
 
@@ -608,7 +612,11 @@ impl<'a> ParserState<'a> {
                     let access_class = if func_class.contains(FuncClass::STATIC) {
                         StorageClass::empty()
                     } else {
-                        let _is_64bit_ptr = self.expect(b"E");
+                        let ptr64 = if self.consume(b"E") {
+                            StorageClass::PTR64
+                        } else {
+                            StorageClass::empty()
+                        };
                         let restrict = if self.consume(b"I") {
                             StorageClass::RESTRICT
                         } else {
@@ -625,7 +633,7 @@ impl<'a> ParserState<'a> {
                             }
                             _ => StorageClass::empty(),
                         };
-                        self.read_qualifier() | restrict | ref_qualifiers
+                        self.read_qualifier() | ptr64 | restrict | ref_qualifiers
                     };
 
                     let calling_conv = self.read_calling_conv()?;
@@ -1195,12 +1203,16 @@ impl<'a> ParserState<'a> {
 
     fn read_member_function_pointer(&mut self, read_qualifiers: bool) -> Result<Type<'a>> {
         let symbol = self.read_name(true)?;
-        let _is_64bit_ptr = self.consume(b"E");
+        let ptr64 = if self.consume(b"E") {
+            StorageClass::PTR64
+        } else {
+            StorageClass::empty()
+        };
         let (access_class, func_class) = if read_qualifiers {
-            (self.read_qualifier(), FuncClass::empty())
+            (self.read_qualifier() | ptr64, FuncClass::empty())
         } else {
             let c = self.get()?;
-            (StorageClass::empty(), self.read_func_class(c)?)
+            (ptr64, self.read_func_class(c)?)
         };
         let calling_conv = self.read_calling_conv()?;
         let storage_class_for_return = self.read_storage_class_for_return()?;
@@ -1340,9 +1352,13 @@ impl<'a> ParserState<'a> {
     }
 
     fn read_pointee(&mut self) -> Result<Type<'a>> {
-        let _is_64bit_ptr = self.expect(b"E");
+        let ptr64 = if self.consume(b"E") {
+            StorageClass::PTR64
+        } else {
+            StorageClass::empty()
+        };
         let storage_class = self.read_storage_class();
-        self.read_var_type(storage_class)
+        self.read_var_type(storage_class | ptr64)
     }
 
     fn read_array(&mut self) -> Result<Type<'a>> {
@@ -1811,6 +1827,7 @@ impl<'a> Serializer<'a> {
     }
 
     fn write_memfn_qualifiers(&mut self, sc: StorageClass) -> Result<()> {
+        let with_ptr64 = self.flags.contains(DemangleFlags::WITH_PTR64);
         if self.flags.contains(DemangleFlags::NO_THISTYPE) {
             // TODO: should probably check for NO_CV_THISTYPE and NO_MS_THISTYPE
             // separately but I don't know what exactly those affect.
@@ -1826,6 +1843,9 @@ impl<'a> Serializer<'a> {
         };
 
         write_one_qual(StorageClass::CONST, b"const")?;
+        if with_ptr64 {
+            write_one_qual(StorageClass::PTR64, b"__ptr64")?;
+        }
         // __restrict is different than `restrict`, keep the underscores!
         write_one_qual(StorageClass::RESTRICT, b"__restrict")?;
         // TODO: undname prints ref-qualifiers tightly to previous qualifiers.
