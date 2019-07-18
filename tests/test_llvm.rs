@@ -120,3 +120,8 @@ fn test_llvm_ms_back_references() {
 fn test_llvm_ms_windows() {
     llvm_test!("llvm-cases/ms-windows.test");
 }
+
+#[test]
+fn test_llvm_cxx11() {
+    llvm_test!("llvm-cases/ms-cxx11.test");
+}

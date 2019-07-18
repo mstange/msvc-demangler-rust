@@ -419,6 +419,7 @@ pub enum Type<'a> {
     Array(i32, Box<Type<'a>>, StorageClass),
     Var(Box<Type<'a>>, VarStorageKind, StorageClass),
 
+    Alias(Symbol<'a>, StorageClass),
     Struct(Symbol<'a>, StorageClass),
     Union(Symbol<'a>, StorageClass),
     Class(Symbol<'a>, StorageClass),
@@ -616,28 +617,7 @@ impl<'a> ParserState<'a> {
                     let access_class = if func_class.contains(FuncClass::STATIC) {
                         StorageClass::empty()
                     } else {
-                        let ptr64 = if self.consume(b"E") {
-                            StorageClass::PTR64
-                        } else {
-                            StorageClass::empty()
-                        };
-                        let restrict = if self.consume(b"I") {
-                            StorageClass::RESTRICT
-                        } else {
-                            StorageClass::empty()
-                        };
-                        let ref_qualifiers = match self.peek() {
-                            Some(b'G') => {
-                                self.expect(b"G")?;
-                                StorageClass::LVALUE_QUAL
-                            }
-                            Some(b'H') => {
-                                self.expect(b"H")?;
-                                StorageClass::RVALUE_QUAL
-                            }
-                            _ => StorageClass::empty(),
-                        };
-                        self.read_qualifier() | ptr64 | restrict | ref_qualifiers
+                        self.read_func_qualifiers()?
                     };
 
                     let calling_conv = self.read_calling_conv()?;
@@ -953,22 +933,57 @@ impl<'a> ParserState<'a> {
         Ok(Symbol { name, scope })
     }
 
-    fn read_func_type(&mut self) -> Result<Type<'a>> {
+    fn read_func_qualifiers(&mut self) -> Result<StorageClass> {
+        let ptr64 = if self.consume(b"E") {
+            StorageClass::PTR64
+        } else {
+            StorageClass::empty()
+        };
+        let restrict = if self.consume(b"I") {
+            StorageClass::RESTRICT
+        } else {
+            StorageClass::empty()
+        };
+        let unaligned = if self.consume(b"F") {
+            StorageClass::UNALIGNED
+        } else {
+            StorageClass::empty()
+        };
+        let ref_qualifiers = match self.peek() {
+            Some(b'G') => {
+                self.expect(b"G")?;
+                StorageClass::LVALUE_QUAL
+            }
+            Some(b'H') => {
+                self.expect(b"H")?;
+                StorageClass::RVALUE_QUAL
+            }
+            _ => StorageClass::empty(),
+        };
+        Ok(self.read_qualifier() | ptr64 | restrict | unaligned | ref_qualifiers)
+    }
+
+    fn read_func_type(&mut self, read_qualifiers: bool) -> Result<Type<'a>> {
+        let sc = if read_qualifiers {
+            self.read_func_qualifiers()?
+        } else {
+            StorageClass::empty()
+        };
         let calling_conv = self.read_calling_conv()?;
         // this might have to be conditional on template context.  For now
         // this does not cause issues.  For more information see
         // https://github.com/mstange/msvc-demangler-rust/issues/21
-        let sc = if self.consume(b"?") {
+        let var_sc = if self.consume(b"?") {
             self.read_storage_class()
         } else {
             StorageClass::empty()
         };
-        let return_type = self.read_var_type(sc)?;
+        let return_type = self.read_var_type(var_sc)?;
         let params = self.read_func_params()?;
         Ok(Type::NonMemberFunction(
             calling_conv,
             params,
-            StorageClass::empty(),
+            sc,
             Box::new(return_type),
         ))
     }
@@ -1149,6 +1164,10 @@ impl<'a> ParserState<'a> {
             Some(b'B') => StorageClass::CONST,
             Some(b'C') => StorageClass::VOLATILE,
             Some(b'D') => StorageClass::CONST | StorageClass::VOLATILE,
+            Some(b'Q') => StorageClass::empty(),
+            Some(b'R') => StorageClass::CONST,
+            Some(b'S') => StorageClass::VOLATILE,
+            Some(b'T') => StorageClass::CONST | StorageClass::VOLATILE,
             _ => return StorageClass::empty(),
         };
         self.advance(1);
@@ -1250,12 +1269,12 @@ impl<'a> ParserState<'a> {
         }
 
         if self.consume(b"A6") {
-            let func_type = self.read_func_type()?;
+            let func_type = self.read_func_type(false)?;
             return Ok(Type::Ref(Box::new(func_type), sc));
         }
 
         if self.consume(b"P6") {
-            let func_type = self.read_func_type()?;
+            let func_type = self.read_func_type(false)?;
             return Ok(Type::Ptr(Box::new(func_type), sc));
         }
 
@@ -1289,7 +1308,14 @@ impl<'a> ParserState<'a> {
                 return Ok(Type::Nullptr);
             }
             if self.consume(b"$A6") {
-                return self.read_func_type();
+                return self.read_func_type(false);
+            }
+            if self.consume(b"$A8@@") {
+                return self.read_func_type(true);
+            }
+            if self.consume(b"$Y") {
+                let name = self.read_name(true)?;
+                return Ok(Type::Alias(name, sc));
             }
             // These next cases can fallthrough, so be careful adding new ones!
             if self.consume(b"$C") {
@@ -1712,6 +1738,10 @@ impl<'a> Serializer<'a> {
                 self.write_pre(inner)?;
                 sc
             }
+            Type::Alias(ref names, sc) => {
+                self.write_name(names, None)?;
+                sc
+            }
             Type::Struct(ref names, sc) => {
                 self.write_class(names, "struct")?;
                 sc
@@ -1877,6 +1907,7 @@ impl<'a> Serializer<'a> {
         };
 
         write_one_qual(StorageClass::CONST, b"const")?;
+        write_one_qual(StorageClass::VOLATILE, b"volatile")?;
         if with_ptr64 {
             write_one_qual(StorageClass::PTR64, b"__ptr64")?;
         }
