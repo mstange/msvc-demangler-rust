@@ -71,7 +71,7 @@ impl Error {
     fn new_parse_error(s: Cow<'static, str>, input: &str, offset: usize) -> Error {
         let context = Cow::Borrowed(input.as_bytes().get(offset..).unwrap_or(&[]));
         let context = if context.len() > 20 {
-            Cow::Owned(format!("{}...", String::from_utf8_lossy(&context[..20])))
+            Cow::Owned(format!("{}..=", String::from_utf8_lossy(&context[..20])))
         } else {
             String::from_utf8_lossy(&context)
         };
@@ -551,7 +551,7 @@ impl<'a> ParserState<'a> {
 
         if let Ok(c) = self.get() {
             let symbol_type = match c {
-                b'0'...b'4' => {
+                b'0'..=b'4' => {
                     // Read a variable.
                     let kind = match c {
                         b'0' => VarStorageKind::PrivateStatic,
@@ -719,13 +719,13 @@ impl<'a> ParserState<'a> {
         for _i in 0..bytes {
             let c = self.get()?;
             let byte: u8 = match c {
-                b'0'...b'9' | b'a'...b'z' | b'A'...b'Z' | b'_' | b'$' => c,
+                b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$' => c,
                 b'?' => {
                     let c = self.get()?;
                     match c {
-                        b'A'...b'Z' => c - b'A' + 0xe1,
-                        b'a'...b'z' => c - b'A' + 0xc1,
-                        b'0'...b'9' => {
+                        b'A'..=b'Z' => c - b'A' + 0xe1,
+                        b'a'..=b'z' => c - b'A' + 0xc1,
+                        b'0'..=b'9' => {
                             let v = &[
                                 b',', b'/', b'\\', b':', b'.', b' ', b'\n', b'\t', b'\'', b'-',
                             ];
@@ -767,7 +767,7 @@ impl<'a> ParserState<'a> {
     // <non-negative integer> ::= <decimal digit> # when 1 <= Number <= 10
     //                        ::= <hex digit>+ @  # when Numbrer == 0 or >= 10
     //
-    // <hex-digit>            ::= [A-P]           # A = 0, B = 1, ...
+    // <hex-digit>            ::= [A-P]           # A = 0, B = 1, ..=
     fn read_number(&mut self) -> Result<i32> {
         let neg = self.consume(b"?");
 
@@ -784,7 +784,7 @@ impl<'a> ParserState<'a> {
                     self.advance(i + 1);
                     return Ok(if neg { -(ret as i32) } else { ret as i32 });
                 }
-                b'A'...b'P' => {
+                b'A'..=b'P' => {
                     ret = (ret << 4) + i32::from(c - b'A');
                     i += 1;
                 }
@@ -815,7 +815,7 @@ impl<'a> ParserState<'a> {
         }
     }
 
-    // First 10 strings can be referenced by special names ?0, ?1, ..., ?9.
+    // First 10 strings can be referenced by special names ?0, ?1, ..=, ?9.
     // Memorize it.
     fn memorize_name(&mut self, n: &Name<'a>) {
         // TODO: the contains check does an equality check on the Name enum, which
@@ -1666,7 +1666,7 @@ impl<'a> Serializer<'a> {
                 return Ok(());
             }
             Type::VarArgs => {
-                write!(self.w, "...")?;
+                write!(self.w, "..=")?;
                 return Ok(());
             }
             Type::Ptr(ref inner, storage_class)
