@@ -551,7 +551,7 @@ impl<'a> ParserState<'a> {
 
         if let Ok(c) = self.get() {
             let symbol_type = match c {
-                b'0'...b'4' => {
+                b'0'..=b'4' => {
                     // Read a variable.
                     let kind = match c {
                         b'0' => VarStorageKind::PrivateStatic,
@@ -719,13 +719,13 @@ impl<'a> ParserState<'a> {
         for _i in 0..bytes {
             let c = self.get()?;
             let byte: u8 = match c {
-                b'0'...b'9' | b'a'...b'z' | b'A'...b'Z' | b'_' | b'$' => c,
+                b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$' => c,
                 b'?' => {
                     let c = self.get()?;
                     match c {
-                        b'A'...b'Z' => c - b'A' + 0xe1,
-                        b'a'...b'z' => c - b'A' + 0xc1,
-                        b'0'...b'9' => {
+                        b'A'..=b'Z' => c - b'A' + 0xe1,
+                        b'a'..=b'z' => c - b'A' + 0xc1,
+                        b'0'..=b'9' => {
                             let v = &[
                                 b',', b'/', b'\\', b':', b'.', b' ', b'\n', b'\t', b'\'', b'-',
                             ];
@@ -784,7 +784,7 @@ impl<'a> ParserState<'a> {
                     self.advance(i + 1);
                     return Ok(if neg { -(ret as i32) } else { ret as i32 });
                 }
-                b'A'...b'P' => {
+                b'A'..=b'P' => {
                     ret = (ret << 4) + i32::from(c - b'A');
                     i += 1;
                 }
