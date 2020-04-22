@@ -71,7 +71,7 @@ impl Error {
     fn new_parse_error(s: Cow<'static, str>, input: &str, offset: usize) -> Error {
         let context = Cow::Borrowed(input.as_bytes().get(offset..).unwrap_or(&[]));
         let context = if context.len() > 20 {
-            Cow::Owned(format!("{}..=", String::from_utf8_lossy(&context[..20])))
+            Cow::Owned(format!("{}...", String::from_utf8_lossy(&context[..20])))
         } else {
             String::from_utf8_lossy(&context)
         };
@@ -767,7 +767,7 @@ impl<'a> ParserState<'a> {
     // <non-negative integer> ::= <decimal digit> # when 1 <= Number <= 10
     //                        ::= <hex digit>+ @  # when Numbrer == 0 or >= 10
     //
-    // <hex-digit>            ::= [A-P]           # A = 0, B = 1, ..=
+    // <hex-digit>            ::= [A-P]           # A = 0, B = 1, ...
     fn read_number(&mut self) -> Result<i32> {
         let neg = self.consume(b"?");
 
@@ -815,7 +815,7 @@ impl<'a> ParserState<'a> {
         }
     }
 
-    // First 10 strings can be referenced by special names ?0, ?1, ..=, ?9.
+    // First 10 strings can be referenced by special names ?0, ?1, ..., ?9.
     // Memorize it.
     fn memorize_name(&mut self, n: &Name<'a>) {
         // TODO: the contains check does an equality check on the Name enum, which
@@ -1666,7 +1666,7 @@ impl<'a> Serializer<'a> {
                 return Ok(());
             }
             Type::VarArgs => {
-                write!(self.w, "..=")?;
+                write!(self.w, "...")?;
                 return Ok(());
             }
             Type::Ptr(ref inner, storage_class)
