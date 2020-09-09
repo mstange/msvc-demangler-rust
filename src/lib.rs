@@ -257,6 +257,7 @@ pub enum VarStorageKind {
 pub enum Name<'a> {
     Operator(Operator<'a>),
     NonTemplate(&'a [u8]),
+    AsInterface(&'a [u8]),
     Template(Box<Name<'a>>, Params<'a>),
     Discriminator(i32),
     ParsedName(Box<ParseResult<'a>>),
@@ -269,6 +270,10 @@ impl<'a> fmt::Debug for Name<'a> {
             Name::Operator(ref op) => f.debug_tuple("Operator").field(&op).finish(),
             Name::NonTemplate(s) => f
                 .debug_tuple("NonTemplate")
+                .field(&String::from_utf8_lossy(s))
+                .finish(),
+            Name::AsInterface(s) => f
+                .debug_tuple("AsInterface")
                 .field(&String::from_utf8_lossy(s))
                 .finish(),
             Name::Template(ref name, ref params) => {
@@ -874,6 +879,12 @@ impl<'a> ParserState<'a> {
                         if memorize {
                             self.memorize_name(&name);
                         }
+                        name
+                    } else if self.consume(b"Q") {
+                        let name = self.read_string()?;
+                        self.expect(b"@")?;
+                        let name = Name::AsInterface(name);
+                        self.memorize_name(&name);
                         name
                     } else {
                         let discriminator = self.read_number()?;
@@ -2176,6 +2187,11 @@ impl<'a> Serializer<'a> {
             Name::NonTemplate(ref name) => {
                 self.w.write_all(name)?;
             }
+            Name::AsInterface(ref name) => {
+                write!(self.w, "[")?;
+                self.w.write_all(name)?;
+                write!(self.w, "]")?;
+            }
             Name::Template(ref name, ref params) => {
                 self.write_one_name(name)?;
                 self.write_tmpl_params(&params)?;
@@ -2272,6 +2288,11 @@ impl<'a> Serializer<'a> {
             }
             Name::NonTemplate(ref name) => {
                 self.w.write_all(name)?;
+            }
+            Name::AsInterface(ref name) => {
+                write!(self.w, "[")?;
+                self.w.write_all(name)?;
+                write!(self.w, "]")?;
             }
             Name::Template(ref name, ref params) => {
                 self.write_one_name(name)?;
