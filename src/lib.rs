@@ -255,6 +255,7 @@ pub enum VarStorageKind {
 // Represents an identifier which may be a template.
 #[derive(Clone, PartialEq)]
 pub enum Name<'a> {
+    Md5(&'a [u8]),
     Operator(Operator<'a>),
     NonTemplate(&'a [u8]),
     Template(Box<Name<'a>>, Params<'a>),
@@ -266,6 +267,10 @@ pub enum Name<'a> {
 impl<'a> fmt::Debug for Name<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
+            Name::Md5(s) => f
+                .debug_tuple("Md5")
+                .field(&String::from_utf8_lossy(s))
+                .finish(),
             Name::Operator(ref op) => f.debug_tuple("Operator").field(&op).finish(),
             Name::NonTemplate(s) => f
                 .debug_tuple("NonTemplate")
@@ -495,6 +500,17 @@ impl<'a> ParserState<'a> {
             return Err(self.fail("does not start with b'?'"));
         }
 
+        if self.consume(b"?@") {
+            let name = self.read_md5_name()?;
+            return Ok(ParseResult {
+                symbol: Symbol {
+                    name,
+                    scope: NameSequence { names: Vec::new() },
+                },
+                symbol_type: Type::None,
+            });
+        }
+
         if self.consume(b"$") {
             if self.consume(b"TSS") {
                 let mut guard_num: i32 = i32::from(
@@ -680,6 +696,27 @@ impl<'a> ParserState<'a> {
         } else {
             Ok(())
         }
+    }
+
+    /// An MD5 mangled name is `??@` followed by 32 characters and a terminating `@`.
+    ///
+    /// See https://github.com/llvm/llvm-project/blob/818cf30b83305fa4a2f75821349210b0f7aff4a4/llvm/lib/Demangle/MicrosoftDemangle.cpp#L754
+    fn read_md5_name(&mut self) -> Result<Name<'a>> {
+        let start_offset = self.offset;
+
+        if start_offset < 3 || !self.input[start_offset - 3..].starts_with("??@") {
+            return Err(self.fail("expected MD5 mangled name"));
+        }
+
+        while !self.consume(b"@") {
+            self.advance(1);
+        }
+        if self.offset - start_offset != 33 {
+            return Err(self.fail("expected MD5 mangled name of length 32"));
+        }
+        Ok(Name::Md5(
+            &self.input.as_bytes()[start_offset - 3..self.offset],
+        ))
     }
 
     fn read_digit(&mut self) -> Option<u8> {
@@ -2169,6 +2206,9 @@ impl<'a> Serializer<'a> {
 
     fn write_one_name(&mut self, name: &Name) -> Result<()> {
         match *name {
+            Name::Md5(ref name) => {
+                self.w.write_all(name)?;
+            }
             Name::Operator(ref op) => {
                 self.write_space()?;
                 self.write_operator_name(op)?;
@@ -2228,6 +2268,9 @@ impl<'a> Serializer<'a> {
         }
 
         match names.name {
+            Name::Md5(ref name) => {
+                self.w.write_all(name)?;
+            }
             Name::Operator(ref op) => {
                 match *op {
                     Operator::Ctor => {

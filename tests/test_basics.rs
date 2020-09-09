@@ -181,6 +181,12 @@ fn other_tests() {
         "?getFactory@SkImageShader@@UBEP6A?AV?$sk_sp@VSkFlattenable@@@@AAVSkReadBuffer@@@ZXZ",
         "public: virtual class sk_sp<class SkFlattenable> (__cdecl * __thiscall SkImageShader::getFactory(void) const)(class SkReadBuffer &)"
     );
+
+    // An MD5 mangled name is "valid" but output as-is
+    expect(
+        "??@8ba8d245c9eca390356129098dbe9f73@",
+        "??@8ba8d245c9eca390356129098dbe9f73@",
+    );
 }
 
 #[test]
