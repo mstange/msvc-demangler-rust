@@ -2231,7 +2231,7 @@ impl<'a> Serializer<'a> {
             Name::Operator(ref op) => {
                 match *op {
                     Operator::Ctor => {
-                        let prev = names.scope.names.iter().next().ok_or_else(|| {
+                        let prev = names.scope.names.get(0).ok_or_else(|| {
                             Error::new(
                                 "If there's a ctor, there should be another name in this sequence",
                             )
@@ -2239,7 +2239,7 @@ impl<'a> Serializer<'a> {
                         self.write_one_name(prev)?;
                     }
                     Operator::Dtor => {
-                        let prev = names.scope.names.iter().next().ok_or_else(|| {
+                        let prev = names.scope.names.get(0).ok_or_else(|| {
                             Error::new(
                                 "If there's a dtor, there should be another name in this sequence",
                             )
