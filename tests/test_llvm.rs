@@ -29,8 +29,8 @@ fn parse_cases<'a, I: Iterator<Item = &'a str>>(i: I) -> impl Iterator<Item = Te
             Some(LineRule::CheckNotInvalid)
         } else if item.starts_with("; CHECK-NOT: ") {
             panic!("unsupported rule: {}", &item[2..]);
-        } else if item.starts_with("; CHECK: ") {
-            Some(LineRule::Check(&item[9..]))
+        } else if let Some(item) = item.strip_prefix("; CHECK: ") {
+            Some(LineRule::Check(item))
         } else if item.starts_with(';') {
             None
         } else {
@@ -45,7 +45,9 @@ fn parse_cases<'a, I: Iterator<Item = &'a str>>(i: I) -> impl Iterator<Item = Te
             Some(LineRule::CheckNotInvalid) => {
                 not_invalid = true;
             }
-            Some(LineRule::Input(input)) => {
+            Some(LineRule::Input(input)) =>
+            {
+                #[allow(clippy::while_let_on_iterator)]
                 while let Some(next) = rule_iter.next() {
                     match next {
                         LineRule::CheckNotInvalid => {
