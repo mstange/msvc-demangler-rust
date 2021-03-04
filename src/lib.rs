@@ -204,7 +204,7 @@ bitflags! {
         const SPACE_BEFORE_POINTER = 0x80_0000;
         /// Add ptr64 to output.  This is disabled by default because it's also not
         /// added by LLVM.  This is in a way the inverse of the DIA `UNDNAME_NO_PTR64`
-        const WITH_PTR64 = 0x100_000;
+        const WITH_PTR64 = 0x100_0000;
     }
 }
 
