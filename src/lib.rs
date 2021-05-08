@@ -839,8 +839,8 @@ impl<'a> ParserState<'a> {
 
     fn read_template_name(&mut self) -> Result<Name<'a>> {
         // Templates have their own context for backreferences.
-        let saved_memorized_names = mem::replace(&mut self.memorized_names, vec![]);
-        let saved_memorized_types = mem::replace(&mut self.memorized_types, vec![]);
+        let saved_memorized_names = mem::take(&mut self.memorized_names);
+        let saved_memorized_types = mem::take(&mut self.memorized_types);
         let name = self.read_unqualified_name(false)?; // how does wine deal with ??$?DM@std@@YA?AV?$complex@M@0@ABMABV10@@Z
         let template_params = self.read_params()?;
         let _ = mem::replace(&mut self.memorized_names, saved_memorized_names);
@@ -1303,7 +1303,7 @@ impl<'a> ParserState<'a> {
                 return Ok(Type::TemplateParameterWithIndex(n));
             }
             if self.consume(b"$BY") {
-                return Ok(self.read_array()?);
+                return self.read_array();
             }
             if self.consume(b"$Q") {
                 return Ok(Type::RValueRef(Box::new(self.read_pointee()?), sc));
