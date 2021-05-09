@@ -181,6 +181,17 @@ fn other_tests() {
         "?getFactory@SkImageShader@@UBEP6A?AV?$sk_sp@VSkFlattenable@@@@AAVSkReadBuffer@@@ZXZ",
         "public: virtual class sk_sp<class SkFlattenable> (__cdecl * __thiscall SkImageShader::getFactory(void) const)(class SkReadBuffer &)"
     );
+
+    expect(
+        "?Present1@?QIDXGISwapChain4@@CDXGISwapChain@@UAGJIIPBUDXGI_PRESENT_PARAMETERS@@@Z", 
+        "public: virtual long __stdcall CDXGISwapChain::[IDXGISwapChain4]::Present1(unsigned int,unsigned int,struct DXGI_PRESENT_PARAMETERS const *)"
+    );
+
+    // An MD5 mangled name is "valid" but output as-is
+    expect(
+        "??@8ba8d245c9eca390356129098dbe9f73@",
+        "??@8ba8d245c9eca390356129098dbe9f73@",
+    );
 }
 
 #[test]
