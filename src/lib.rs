@@ -142,6 +142,7 @@ impl fmt::Display for Error {
 type Result<T> = result::Result<T, Error>;
 
 bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq)]
     pub struct StorageClass: u32 {
         const CONST       = 0b0_0000_0001;
         const VOLATILE    = 0b0_0000_0010;
@@ -156,6 +157,7 @@ bitflags! {
 }
 
 bitflags! {
+    #[derive(Clone, Copy)]
     pub struct DemangleFlags: u32 {
         /// Undecorate 32-bit decorated names.
         const DECODE_32_BIT = 0x0800;
@@ -190,7 +192,7 @@ bitflags! {
         // /// Do not undecorate special names, such as vtable, vcall, vector, metatype, and so on.
         // const NO_SPECIAL_SYMS = 0x4000;
         /// Disable all modifiers on the this type.
-        const NO_THISTYPE = Self::NO_MS_THISTYPE.bits | Self::NO_CV_THISTYPE.bits;
+        const NO_THISTYPE = Self::NO_MS_THISTYPE.bits() | Self::NO_CV_THISTYPE.bits();
         // /// Disable expansion of throw-signatures for functions and pointers to functions.
         // const NO_THROW_SIGNATURES = 0x0100;
         /// Disable output of struct/union/class/enum specifiers.
@@ -230,6 +232,7 @@ pub enum CallingConv {
 }
 
 bitflags! {
+    #[derive(Clone, Debug, PartialEq)]
     pub struct FuncClass: u32 {
         const PUBLIC     = 0b0000_0001;
         const PROTECTED  = 0b0000_0010;
@@ -1601,7 +1604,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_calling_conv(&mut self, calling_conv: CallingConv) -> Result<()> {
+    fn write_calling_conv(&mut self, calling_conv: &CallingConv) -> Result<()> {
         match self.w.last() {
             Some(b' ') | Some(b'(') => {}
             _ => write!(self.w, " ")?,
@@ -1634,7 +1637,7 @@ impl<'a> Serializer<'a> {
 
     // Write the "first half" of a given type.
     fn write_pre(&mut self, t: &Type) -> Result<()> {
-        let storage_class = match *t {
+        let storage_class = match t {
             Type::None => return Ok(()),
             Type::MemberFunction(func_class, calling_conv, _, _, ref inner) => {
                 if func_class.contains(FuncClass::THUNK) {
@@ -1724,7 +1727,7 @@ impl<'a> Serializer<'a> {
                         self.write_pre(inner)?;
                         self.write_space()?;
                         write!(self.w, "(")?;
-                        self.write_calling_conv(calling_conv)?;
+                        self.write_calling_conv(&calling_conv)?;
                     }
                     Type::Array(_, _, _) => {
                         self.write_pre(inner)?;
@@ -1736,7 +1739,7 @@ impl<'a> Serializer<'a> {
                     }
                 }
 
-                match *t {
+                match t {
                     Type::Ptr(_, _) => {
                         if !self.flags.contains(DemangleFlags::HUG_TYPE) {
                             self.write_space()?;
