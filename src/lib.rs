@@ -816,12 +816,12 @@ impl<'a> ParserState<'a> {
         }
 
         let mut i = 0;
-        let mut ret = 0;
+        let mut ret = 0i32;
         for c in self.remaining {
             match *c {
                 b'@' => {
                     self.advance(i + 1);
-                    return Ok(if neg { -(ret as i32) } else { ret as i32 });
+                    return Ok(if neg { ret.wrapping_neg() } else { ret });
                 }
                 b'A'..=b'P' => {
                     ret = (ret << 4) + i32::from(c - b'A');
