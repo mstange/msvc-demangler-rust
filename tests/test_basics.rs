@@ -860,3 +860,17 @@ fn upstream_tests() {
         "`struct S & __cdecl f(void)'::`0'::`local static thread guard'{17}",
     );
 }
+
+#[test]
+fn gh_issues() {
+    let expect = |input, reference| {
+        expect_with_flags(input, reference, 0x0);
+    };
+
+    // panic: attempt to negate with overflow in `msvc_demangler::ParserState::read_number`:
+    // <https://github.com/mstange/msvc-demangler-rust/issues/72>.
+    expect(
+        "??$TypedThrowBadVariantAccess@AEBV?$IdType@VGpuDiskCacheDawnWebGPU@gpu@@H$0?IAAAAAAA@$00$S@base@@@variant_internal@absl@@YAAEBV?$IdType@VGpuDiskCacheDawnWebGPU@gpu@@H$0?IAAAAAAA@$00$S@base@@XZ",
+        "class base::IdType<class gpu::GpuDiskCacheDawnWebGPU,int,-2147483648,1> const & __cdecl absl::variant_internal::TypedThrowBadVariantAccess<class base::IdType<class gpu::GpuDiskCacheDawnWebGPU,int,-2147483648,1> const &>(void)"
+    );
+}
