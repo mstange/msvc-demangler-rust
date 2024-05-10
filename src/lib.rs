@@ -116,9 +116,9 @@ impl From<std::io::Error> for Error {
 impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self.repr {
-            ErrorRepr::FromUtf8(ref e) => Some(&*e),
-            ErrorRepr::Utf8(ref e) => Some(&*e),
-            ErrorRepr::Io(ref e) => Some(&*e),
+            ErrorRepr::FromUtf8(ref e) => Some(e),
+            ErrorRepr::Utf8(ref e) => Some(e),
+            ErrorRepr::Io(ref e) => Some(e),
             ErrorRepr::ParseError(..) => None,
             ErrorRepr::Other(_) => None,
         }
@@ -724,7 +724,7 @@ impl<'a> ParserState<'a> {
     fn read_digit(&mut self) -> Option<u8> {
         match self.peek() {
             Some(first) => {
-                if char::from(first).is_digit(10) {
+                if char::from(first).is_ascii_digit() {
                     self.advance(1);
                     Some(first - b'0')
                 } else {
@@ -738,7 +738,7 @@ impl<'a> ParserState<'a> {
     fn read_hex_digit(&mut self) -> Option<char> {
         match self.peek() {
             Some(first) => {
-                if char::from(first).is_digit(16) {
+                if char::from(first).is_ascii_hexdigit() {
                     self.advance(1);
                     Some(first as char)
                 } else {
@@ -1562,7 +1562,7 @@ pub fn serialize(input: &ParseResult, flags: DemangleFlags) -> Result<String> {
     let mut s = Vec::new();
     {
         let mut serializer = Serializer { flags, w: &mut s };
-        serializer.serialize(&input)?;
+        serializer.serialize(input)?;
     }
     Ok(String::from_utf8(s)?)
 }
@@ -2214,7 +2214,7 @@ impl<'a> Serializer<'a> {
 
     fn write_one_name(&mut self, name: &Name) -> Result<()> {
         match *name {
-            Name::Md5(ref name) => {
+            Name::Md5(name) => {
                 write!(self.w, "??@")?;
                 self.w.write_all(name)?;
                 write!(self.w, "@")?;
@@ -2223,17 +2223,17 @@ impl<'a> Serializer<'a> {
                 self.write_space()?;
                 self.write_operator_name(op)?;
             }
-            Name::NonTemplate(ref name) => {
+            Name::NonTemplate(name) => {
                 self.w.write_all(name)?;
             }
-            Name::AsInterface(ref name) => {
+            Name::AsInterface(name) => {
                 write!(self.w, "[")?;
                 self.w.write_all(name)?;
                 write!(self.w, "]")?;
             }
             Name::Template(ref name, ref params) => {
                 self.write_one_name(name)?;
-                self.write_tmpl_params(&params)?;
+                self.write_tmpl_params(params)?;
             }
             Name::Discriminator(ref val) => {
                 write!(self.w, "`{}'", val)?;
@@ -2252,11 +2252,11 @@ impl<'a> Serializer<'a> {
         // Print out namespaces or outer class names.
         let mut i = names.names.iter().rev();
         if let Some(name) = i.next() {
-            self.write_one_name(&name)?;
+            self.write_one_name(name)?;
         }
         for name in i {
             write!(self.w, "::")?;
-            self.write_one_name(&name)?;
+            self.write_one_name(name)?;
         }
         Ok(())
     }
@@ -2283,7 +2283,7 @@ impl<'a> Serializer<'a> {
         }
 
         match names.name {
-            Name::Md5(ref name) => {
+            Name::Md5(name) => {
                 write!(self.w, "??@")?;
                 self.w.write_all(name)?;
                 write!(self.w, "@")?;
@@ -2291,7 +2291,7 @@ impl<'a> Serializer<'a> {
             Name::Operator(ref op) => {
                 match *op {
                     Operator::Ctor => {
-                        let prev = names.scope.names.get(0).ok_or_else(|| {
+                        let prev = names.scope.names.first().ok_or_else(|| {
                             Error::new(
                                 "If there's a ctor, there should be another name in this sequence",
                             )
@@ -2299,7 +2299,7 @@ impl<'a> Serializer<'a> {
                         self.write_one_name(prev)?;
                     }
                     Operator::Dtor => {
-                        let prev = names.scope.names.get(0).ok_or_else(|| {
+                        let prev = names.scope.names.first().ok_or_else(|| {
                             Error::new(
                                 "If there's a dtor, there should be another name in this sequence",
                             )
@@ -2330,17 +2330,17 @@ impl<'a> Serializer<'a> {
                     }
                 }
             }
-            Name::NonTemplate(ref name) => {
+            Name::NonTemplate(name) => {
                 self.w.write_all(name)?;
             }
-            Name::AsInterface(ref name) => {
+            Name::AsInterface(name) => {
                 write!(self.w, "[")?;
                 self.w.write_all(name)?;
                 write!(self.w, "]")?;
             }
             Name::Template(ref name, ref params) => {
                 self.write_one_name(name)?;
-                self.write_tmpl_params(&params)?;
+                self.write_tmpl_params(params)?;
             }
             Name::Discriminator(ref val) => {
                 write!(self.w, "`{}'", val)?;
@@ -2356,7 +2356,7 @@ impl<'a> Serializer<'a> {
         Ok(())
     }
 
-    fn write_tmpl_params<'b>(&mut self, params: &Params<'b>) -> Result<()> {
+    fn write_tmpl_params(&mut self, params: &Params<'_>) -> Result<()> {
         write!(self.w, "<")?;
         if !params.types.is_empty() {
             self.write_types(&params.types)?;
