@@ -45,10 +45,8 @@ fn parse_cases<'a, I: Iterator<Item = &'a str>>(i: I) -> impl Iterator<Item = Te
             Some(LineRule::CheckNotInvalid) => {
                 not_invalid = true;
             }
-            Some(LineRule::Input(input)) =>
-            {
-                #[allow(clippy::while_let_on_iterator)]
-                while let Some(next) = rule_iter.next() {
+            Some(LineRule::Input(input)) => {
+                if let Some(next) = rule_iter.next() {
                     match next {
                         LineRule::CheckNotInvalid => {
                             panic!("not invalid at unexpected position");
