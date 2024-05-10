@@ -8,7 +8,7 @@ fn main() {
     let mut args: Vec<_> = env::args().collect();
     args.remove(0);
 
-    let verbose = if args.get(0).map(|x| x.as_str()) == Some("-v") {
+    let verbose = if args.first().map(|x| x.as_str()) == Some("-v") {
         args.remove(0);
         true
     } else {
@@ -16,7 +16,7 @@ fn main() {
     };
 
     let print_demangled = |sym: &str| {
-        let parsed = match msvc_demangler::parse(&sym) {
+        let parsed = match msvc_demangler::parse(sym) {
             Ok(parsed) => parsed,
             Err(err) => {
                 eprintln!("error: {}", err);
