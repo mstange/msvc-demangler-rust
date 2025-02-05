@@ -3,7 +3,7 @@ extern crate msvc_demangler;
 use msvc_demangler::{demangle, DemangleFlags};
 
 fn expect_with_flags(input: &str, reference: &str, flags: u32) {
-    let demangled = demangle(input, ::DemangleFlags::from_bits(flags).unwrap());
+    let demangled = demangle(input, DemangleFlags::from_bits(flags).unwrap());
     let reference = reference.to_owned();
     if let Ok(demangled) = demangled {
         assert_eq!(demangled, reference);
@@ -14,7 +14,7 @@ fn expect_with_flags(input: &str, reference: &str, flags: u32) {
 
 // For cases where undname demangles differently/better than we do.
 fn expect_failure(input: &str, reference: &str) {
-    let demangled = demangle(input, ::DemangleFlags::COMPLETE).unwrap();
+    let demangled = demangle(input, DemangleFlags::COMPLETE).unwrap();
     let reference = reference.to_owned();
     assert_ne!(demangled, reference);
 }

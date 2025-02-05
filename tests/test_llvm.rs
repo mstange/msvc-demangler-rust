@@ -77,7 +77,7 @@ macro_rules! llvm_test {
         for case in parse_cases(rules.lines()) {
             if case.not_invalid {
                 let parsed = dbg!(parse(case.mangled).unwrap());
-                let demangled = serialize(&parsed, DemangleFlags::llvm()).unwrap();
+                let demangled = serialize(&parsed, DemangleFlags::llvm());
                 println!("      mangled: {}", case.mangled);
                 println!("demangled ref: {}", case.demangled_ref);
                 println!("    demangled: {}", &demangled);
