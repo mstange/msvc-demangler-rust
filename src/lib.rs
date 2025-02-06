@@ -23,23 +23,26 @@
 //! This msvc-demangler is dual licensed under the MIT and the University of
 //! Illinois Open Source Licenses.
 
+#![no_std]
 #![deny(missing_debug_implementations)]
 #![deny(unsafe_code)]
 
-#[macro_use]
-extern crate bitflags;
+extern crate alloc;
 
-use std::borrow::Cow;
-use std::cmp::min;
-use std::error;
-use std::fmt;
-use std::io;
-use std::io::Write;
-use std::mem;
-use std::result;
-use std::str;
-use std::str::Utf8Error;
-use std::string::FromUtf8Error;
+use alloc::borrow::Cow;
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::string::{FromUtf8Error, ToString};
+use alloc::vec::Vec;
+use alloc::{format, vec};
+use bitflags::bitflags;
+use core::cmp::min;
+use core::error;
+use core::fmt;
+use core::mem;
+use core::result;
+use core::str;
+use core::str::Utf8Error;
 
 pub struct Error {
     repr: ErrorRepr,
@@ -55,7 +58,6 @@ impl fmt::Debug for Error {
 pub enum ErrorRepr {
     FromUtf8(FromUtf8Error),
     Utf8(Utf8Error),
-    Io(io::Error),
     ParseError(Cow<'static, str>, String, usize),
     Other(String),
 }
@@ -105,20 +107,11 @@ impl From<FromUtf8Error> for Error {
     }
 }
 
-impl From<std::io::Error> for Error {
-    fn from(err: std::io::Error) -> Error {
-        Error {
-            repr: ErrorRepr::Io(err),
-        }
-    }
-}
-
 impl error::Error for Error {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self.repr {
             ErrorRepr::FromUtf8(ref e) => Some(e),
             ErrorRepr::Utf8(ref e) => Some(e),
-            ErrorRepr::Io(ref e) => Some(e),
             ErrorRepr::ParseError(..) => None,
             ErrorRepr::Other(_) => None,
         }
@@ -130,7 +123,6 @@ impl fmt::Display for Error {
         match self.repr {
             ErrorRepr::FromUtf8(ref e) => fmt::Display::fmt(e, f),
             ErrorRepr::Utf8(ref e) => fmt::Display::fmt(e, f),
-            ErrorRepr::Io(ref e) => fmt::Display::fmt(e, f),
             ErrorRepr::ParseError(ref msg, ref context, offset) => {
                 write!(f, "{} (offset: {}, remaining: {:?})", msg, offset, context)
             }
@@ -268,7 +260,7 @@ pub enum Name<'a> {
     AnonymousNamespace(Option<String>),
 }
 
-impl<'a> fmt::Debug for Name<'a> {
+impl fmt::Debug for Name<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Name::Md5(s) => f
@@ -765,15 +757,13 @@ impl<'a> ParserState<'a> {
                         b'A'..=b'Z' => c - b'A' + 0xe1,
                         b'a'..=b'z' => c - b'A' + 0xc1,
                         b'0'..=b'9' => {
-                            let v = &[
-                                b',', b'/', b'\\', b':', b'.', b' ', b'\n', b'\t', b'\'', b'-',
-                            ];
+                            let v = b",/\\:. \n\t'-";
                             v[(c - b'0') as usize]
                         }
                         b'$' => {
                             let high = self.get()? - b'A';
                             let low = self.get()? - b'A';
-                            high << 4 | low
+                            (high << 4) | low
                         }
                         _ => {
                             return Err(self.fail_args(format_args!(
@@ -1365,16 +1355,11 @@ impl<'a> ParserState<'a> {
             // These next cases can fallthrough, so be careful adding new ones!
             if self.consume(b"$C") {
                 sc = self.read_qualifier();
-            } else if let Some(x) = self.peek() {
-                match x {
-                    // Inheritance specifiers, which we don't need to remember.
-                    b'1' | b'H' | b'I' | b'J' => {
-                        self.advance(1);
-                        self.expect(b"?")?;
-                        return self.read_member_function_pointer(false);
-                    }
-                    _ => {}
-                };
+            } else if let Some(b'1' | b'H' | b'I' | b'J') = self.peek() {
+                // Inheritance specifiers, which we don't need to remember.
+                self.advance(1);
+                self.expect(b"?")?;
+                return self.read_member_function_pointer(false);
             }
         }
 
@@ -1544,7 +1529,7 @@ impl<'a> ParserState<'a> {
 }
 
 pub fn demangle(input: &str, flags: DemangleFlags) -> Result<String> {
-    serialize(&parse(input)?, flags)
+    Ok(serialize(&parse(input)?, flags))
 }
 
 pub fn parse(input: &str) -> Result<ParseResult> {
@@ -1558,13 +1543,13 @@ pub fn parse(input: &str) -> Result<ParseResult> {
     state.parse()
 }
 
-pub fn serialize(input: &ParseResult, flags: DemangleFlags) -> Result<String> {
+pub fn serialize(input: &ParseResult, flags: DemangleFlags) -> String {
     let mut s = Vec::new();
     {
         let mut serializer = Serializer { flags, w: &mut s };
-        serializer.serialize(input)?;
+        serializer.serialize(input);
     }
-    Ok(String::from_utf8(s)?)
+    String::from_utf8(s).unwrap_or_else(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
 }
 
 // Converts an AST to a string.
@@ -1589,130 +1574,127 @@ struct Serializer<'a> {
     w: &'a mut Vec<u8>,
 }
 
-impl<'a> Serializer<'a> {
-    fn serialize(&mut self, parse_result: &ParseResult) -> Result<()> {
+impl Serializer<'_> {
+    fn serialize(&mut self, parse_result: &ParseResult) {
         if !self
             .flags
             .intersects(DemangleFlags::NAME_ONLY | DemangleFlags::NO_FUNCTION_RETURNS)
         {
-            self.write_pre(&parse_result.symbol_type)?;
+            self.write_pre(&parse_result.symbol_type);
         }
-        self.write_name(&parse_result.symbol, Some(&parse_result.symbol_type))?;
+        self.write_name(&parse_result.symbol, Some(&parse_result.symbol_type));
         if !self.flags.contains(DemangleFlags::NAME_ONLY) {
-            self.write_post(&parse_result.symbol_type)?;
+            self.write_post(&parse_result.symbol_type);
         }
-        Ok(())
     }
 
-    fn write_calling_conv(&mut self, calling_conv: &CallingConv) -> Result<()> {
+    fn write_calling_conv(&mut self, calling_conv: &CallingConv) {
         match self.w.last() {
             Some(b' ') | Some(b'(') => {}
-            _ => write!(self.w, " ")?,
+            _ => self.w.push(b' '),
         }
         if !self.flags.contains(DemangleFlags::NO_MS_KEYWORDS) {
             match calling_conv {
                 CallingConv::Cdecl => {
-                    write!(self.w, "__cdecl ")?;
+                    self.w.extend(b"__cdecl ");
                 }
                 CallingConv::Pascal => {
-                    write!(self.w, "__pascal ")?;
+                    self.w.extend(b"__pascal ");
                 }
                 CallingConv::Thiscall => {
-                    write!(self.w, "__thiscall ")?;
+                    self.w.extend(b"__thiscall ");
                 }
                 CallingConv::Stdcall => {
-                    write!(self.w, "__stdcall ")?;
+                    self.w.extend(b"__stdcall ");
                 }
                 CallingConv::Fastcall => {
-                    write!(self.w, "__fastcall ")?;
+                    self.w.extend(b"__fastcall ");
                 }
                 CallingConv::_Regcall => {
-                    write!(self.w, "__regcall ")?;
+                    self.w.extend(b"__regcall ");
                 }
             };
         }
-
-        Ok(())
     }
 
     // Write the "first half" of a given type.
-    fn write_pre(&mut self, t: &Type) -> Result<()> {
+    fn write_pre(&mut self, t: &Type) {
         let storage_class = match t {
-            Type::None => return Ok(()),
+            Type::None => return,
             Type::MemberFunction(func_class, calling_conv, _, _, ref inner) => {
                 if func_class.contains(FuncClass::THUNK) {
-                    write!(self.w, "[thunk]: ")?
+                    self.w.extend(b"[thunk]: ")
                 }
                 if !self.flags.contains(DemangleFlags::NO_ACCESS_SPECIFIERS) {
                     if func_class.contains(FuncClass::PRIVATE) {
-                        write!(self.w, "private: ")?
+                        self.w.extend(b"private: ")
                     }
                     if func_class.contains(FuncClass::PROTECTED) {
-                        write!(self.w, "protected: ")?
+                        self.w.extend(b"protected: ")
                     }
                     if func_class.contains(FuncClass::PUBLIC) {
-                        write!(self.w, "public: ")?
+                        self.w.extend(b"public: ")
                     }
                 }
                 if !self.flags.contains(DemangleFlags::NO_MEMBER_TYPE) {
                     if func_class.contains(FuncClass::STATIC) {
-                        write!(self.w, "static ")?
+                        self.w.extend(b"static ")
                     }
                     if func_class.contains(FuncClass::VIRTUAL) {
-                        write!(self.w, "virtual ")?;
+                        self.w.extend(b"virtual ");
                     }
                 }
-                self.write_pre(inner)?;
-                self.write_calling_conv(calling_conv)?;
-                return Ok(());
+                self.write_pre(inner);
+                self.write_calling_conv(calling_conv);
+                return;
             }
             Type::MemberFunctionPointer(ref symbol, _, calling_conv, _, _, ref inner) => {
-                self.write_pre(inner)?;
-                self.write_space()?;
-                write!(self.w, "(")?;
-                self.write_calling_conv(calling_conv)?;
-                self.write_space()?;
-                self.write_space()?;
-                self.write_name(symbol, None)?;
-                write!(self.w, "::*")?;
-                return Ok(());
+                self.write_pre(inner);
+                self.write_space();
+                self.w.push(b'(');
+                self.write_calling_conv(calling_conv);
+                self.write_space();
+                self.write_space();
+                self.write_name(symbol, None);
+                self.w.extend(b"::*");
+                return;
             }
             Type::NonMemberFunction(calling_conv, _, _, ref inner) => {
-                self.write_pre(inner)?;
-                self.write_calling_conv(calling_conv)?;
-                return Ok(());
+                self.write_pre(inner);
+                self.write_calling_conv(calling_conv);
+                return;
             }
             Type::VCallThunk(_, calling_conv) => {
-                write!(self.w, "[thunk]: ")?;
-                self.write_calling_conv(calling_conv)?;
-                return Ok(());
+                self.w.extend(b"[thunk]: ");
+                self.write_calling_conv(calling_conv);
+                return;
             }
             Type::CXXVBTable(_, sc) => sc,
             Type::CXXVFTable(_, sc) => sc,
             Type::TemplateParameterWithIndex(n) => {
-                write!(self.w, "`template-parameter{}'", n)?;
-                return Ok(());
+                self.w.extend(b"`template-parameter");
+                self.w.extend(itoa::Buffer::new().format(*n).as_bytes());
+                self.w.push(b'\'');
+                return;
             }
             Type::ThreadSafeStaticGuard(num) => {
-                write!(self.w, "TSS{}", num)?;
-                return Ok(());
+                self.w.extend(b"TSS");
+                self.w.extend(itoa::Buffer::new().format(*num).as_bytes());
+                return;
             }
             Type::Constant(n) => {
-                write!(self.w, "{}", n)?;
-                return Ok(());
+                self.w.extend(itoa::Buffer::new().format(*n).as_bytes());
+                return;
             }
             Type::ConstantString(_) => {
                 // We have no idea what the original encoding of the string is,
                 // and undname doesn't even try to display anything.
-                //match str::from_utf8(s).ok() {
-                //  Some(ref s) => write!(self.w, "{}", s)?,
-                //  None => {},
-                //}
-                return Ok(());
+                //self.w.extend(s);
+                return;
             }
             Type::VarArgs => {
-                write!(self.w, "...")?;
-                return Ok(());
+                self.w.extend(b"...");
+                return;
             }
             Type::Ptr(ref inner, storage_class)
             | Type::Ref(ref inner, storage_class)
@@ -1724,45 +1706,45 @@ impl<'a> Serializer<'a> {
                 match *inner.as_ref() {
                     Type::MemberFunction(_, calling_conv, _, _, ref inner)
                     | Type::NonMemberFunction(calling_conv, _, _, ref inner) => {
-                        self.write_pre(inner)?;
-                        self.write_space()?;
-                        write!(self.w, "(")?;
-                        self.write_calling_conv(&calling_conv)?;
+                        self.write_pre(inner);
+                        self.write_space();
+                        self.w.push(b'(');
+                        self.write_calling_conv(&calling_conv);
                     }
                     Type::Array(_, _, _) => {
-                        self.write_pre(inner)?;
-                        self.write_space()?;
-                        write!(self.w, "(")?;
+                        self.write_pre(inner);
+                        self.write_space();
+                        self.w.push(b'(');
                     }
                     _ => {
-                        self.write_pre(inner)?;
+                        self.write_pre(inner);
                     }
                 }
 
                 match t {
                     Type::Ptr(_, _) => {
                         if !self.flags.contains(DemangleFlags::HUG_TYPE) {
-                            self.write_space()?;
+                            self.write_space();
                         } else if self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
-                            self.write_space_ptr()?;
+                            self.write_space_ptr();
                         }
-                        write!(self.w, "*")?
+                        self.w.push(b'*')
                     }
                     Type::Ref(_, _) => {
                         if !self.flags.contains(DemangleFlags::HUG_TYPE) {
-                            self.write_space()?;
+                            self.write_space();
                         } else if self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
-                            self.write_space_ptr()?;
+                            self.write_space_ptr();
                         }
-                        write!(self.w, "&")?
+                        self.w.push(b'&')
                     }
                     Type::RValueRef(_, _) => {
                         if !self.flags.contains(DemangleFlags::HUG_TYPE) {
-                            self.write_space()?;
+                            self.write_space();
                         } else if self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
-                            self.write_space_ptr()?;
+                            self.write_space_ptr();
                         }
-                        write!(self.w, "&&")?
+                        self.w.extend(b"&&")
                     }
                     _ => {}
                 }
@@ -1770,313 +1752,306 @@ impl<'a> Serializer<'a> {
                 storage_class
             }
             Type::Array(_len, ref inner, storage_class) => {
-                self.write_pre(inner)?;
+                self.write_pre(inner);
                 storage_class
             }
             Type::Var(ref inner, kind, sc) => {
                 match kind {
-                    VarStorageKind::PrivateStatic => write!(self.w, "private: static ")?,
-                    VarStorageKind::ProtectedStatic => write!(self.w, "protected: static ")?,
-                    VarStorageKind::PublicStatic => write!(self.w, "public: static ")?,
+                    VarStorageKind::PrivateStatic => self.w.extend(b"private: static "),
+                    VarStorageKind::ProtectedStatic => self.w.extend(b"protected: static "),
+                    VarStorageKind::PublicStatic => self.w.extend(b"public: static "),
                     VarStorageKind::Global | VarStorageKind::FunctionLocalStatic => {}
                 }
-                self.write_pre(inner)?;
+                self.write_pre(inner);
                 sc
             }
             Type::Alias(ref names, sc) => {
-                self.write_name(names, None)?;
+                self.write_name(names, None);
                 sc
             }
             Type::Struct(ref names, sc) => {
-                self.write_class(names, "struct")?;
+                self.write_class(names, "struct");
                 sc
             }
             Type::Union(ref names, sc) => {
-                self.write_class(names, "union")?;
+                self.write_class(names, "union");
                 sc
             }
             Type::Class(ref names, sc) => {
-                self.write_class(names, "class")?;
+                self.write_class(names, "class");
                 sc
             }
             Type::Enum(ref names, sc) => {
-                self.write_class(names, "enum")?;
+                self.write_class(names, "enum");
                 sc
             }
             Type::Void(sc) => {
-                write!(self.w, "void")?;
+                self.w.extend(b"void");
                 sc
             }
             Type::Bool(sc) => {
-                write!(self.w, "bool")?;
+                self.w.extend(b"bool");
                 sc
             }
             Type::Char(sc) => {
-                write!(self.w, "char")?;
+                self.w.extend(b"char");
                 sc
             }
             Type::Schar(sc) => {
-                write!(self.w, "signed char")?;
+                self.w.extend(b"signed char");
                 sc
             }
             Type::Uchar(sc) => {
-                write!(self.w, "unsigned char")?;
+                self.w.extend(b"unsigned char");
                 sc
             }
             Type::Short(sc) => {
-                write!(self.w, "short")?;
+                self.w.extend(b"short");
                 sc
             }
             Type::Ushort(sc) => {
-                write!(self.w, "unsigned short")?;
+                self.w.extend(b"unsigned short");
                 sc
             }
             Type::Int(sc) => {
-                write!(self.w, "int")?;
+                self.w.extend(b"int");
                 sc
             }
             Type::Uint(sc) => {
-                write!(self.w, "unsigned int")?;
+                self.w.extend(b"unsigned int");
                 sc
             }
             Type::Long(sc) => {
-                write!(self.w, "long")?;
+                self.w.extend(b"long");
                 sc
             }
             Type::Ulong(sc) => {
-                write!(self.w, "unsigned long")?;
+                self.w.extend(b"unsigned long");
                 sc
             }
             Type::Int64(sc) => {
                 if self.flags.contains(DemangleFlags::MS_TYPENAMES) {
-                    write!(self.w, "__int64")?;
+                    self.w.extend(b"__int64");
                 } else {
-                    write!(self.w, "int64_t")?;
+                    self.w.extend(b"int64_t");
                 }
                 sc
             }
             Type::Uint64(sc) => {
                 if self.flags.contains(DemangleFlags::MS_TYPENAMES) {
-                    write!(self.w, "unsigned __int64")?;
+                    self.w.extend(b"unsigned __int64");
                 } else {
-                    write!(self.w, "uint64_t")?;
+                    self.w.extend(b"uint64_t");
                 }
                 sc
             }
             Type::Int128(sc) => {
                 if self.flags.contains(DemangleFlags::MS_TYPENAMES) {
-                    write!(self.w, "__int128")?;
+                    self.w.extend(b"__int128");
                 } else {
-                    write!(self.w, "int128_t")?;
+                    self.w.extend(b"int128_t");
                 }
                 sc
             }
             Type::Uint128(sc) => {
                 if self.flags.contains(DemangleFlags::MS_TYPENAMES) {
-                    write!(self.w, "unsigned __int128")?;
+                    self.w.extend(b"unsigned __int128");
                 } else {
-                    write!(self.w, "uint128_t")?;
+                    self.w.extend(b"uint128_t");
                 }
                 sc
             }
             Type::Wchar(sc) => {
-                write!(self.w, "wchar_t")?;
+                self.w.extend(b"wchar_t");
                 sc
             }
             Type::Float(sc) => {
-                write!(self.w, "float")?;
+                self.w.extend(b"float");
                 sc
             }
             Type::Double(sc) => {
-                write!(self.w, "double")?;
+                self.w.extend(b"double");
                 sc
             }
             Type::Ldouble(sc) => {
-                write!(self.w, "long double")?;
+                self.w.extend(b"long double");
                 sc
             }
             Type::Char8(sc) => {
-                write!(self.w, "char8_t")?;
+                self.w.extend(b"char8_t");
                 sc
             }
             Type::Char16(sc) => {
-                write!(self.w, "char16_t")?;
+                self.w.extend(b"char16_t");
                 sc
             }
             Type::Char32(sc) => {
-                write!(self.w, "char32_t")?;
+                self.w.extend(b"char32_t");
                 sc
             }
             Type::Nullptr => {
-                write!(self.w, "std::nullptr_t")?;
-                return Ok(());
+                self.w.extend(b"std::nullptr_t");
+                return;
             }
-            Type::EmptyParameterPack => return Ok(()),
-            Type::RTTIType => return Ok(()),
+            Type::EmptyParameterPack => return,
+            Type::RTTIType => return,
         };
 
         if storage_class.contains(StorageClass::CONST) {
             if self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
-                self.write_space_ptr()?;
+                self.write_space_ptr();
             } else {
-                self.write_space()?;
+                self.write_space();
             }
-            write!(self.w, "const")?;
+            self.w.extend(b"const");
         }
         if storage_class.contains(StorageClass::VOLATILE) {
             if self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
-                self.write_space_ptr()?;
+                self.write_space_ptr();
             } else {
-                self.write_space()?;
+                self.write_space();
             }
-            write!(self.w, "volatile")?;
+            self.w.extend(b"volatile");
         }
-
-        Ok(())
     }
 
-    fn write_memfn_qualifiers(&mut self, sc: StorageClass) -> Result<()> {
+    fn write_memfn_qualifiers(&mut self, sc: StorageClass) {
         let with_ptr64 = self.flags.contains(DemangleFlags::WITH_PTR64);
         if self.flags.contains(DemangleFlags::NO_THISTYPE) {
             // TODO: should probably check for NO_CV_THISTYPE and NO_MS_THISTYPE
             // separately but I don't know what exactly those affect.
-            return Ok(());
+            return;
         }
-        let mut write_one_qual = |flag, s| -> Result<()> {
+        let mut write_one_qual = |flag, s: &[u8]| {
             if sc.contains(flag) {
-                self.write_space()?;
-                self.w.write_all(s)?;
+                self.write_space();
+                self.w.extend(s);
             }
-
-            Ok(())
         };
 
-        write_one_qual(StorageClass::CONST, b"const")?;
-        write_one_qual(StorageClass::VOLATILE, b"volatile")?;
+        write_one_qual(StorageClass::CONST, b"const");
+        write_one_qual(StorageClass::VOLATILE, b"volatile");
         if with_ptr64 {
-            write_one_qual(StorageClass::PTR64, b"__ptr64")?;
+            write_one_qual(StorageClass::PTR64, b"__ptr64");
         }
         // __restrict is different than `restrict`, keep the underscores!
-        write_one_qual(StorageClass::RESTRICT, b"__restrict")?;
+        write_one_qual(StorageClass::RESTRICT, b"__restrict");
         // TODO: undname prints ref-qualifiers tightly to previous qualifiers.
-        write_one_qual(StorageClass::LVALUE_QUAL, b"&")?;
-        write_one_qual(StorageClass::RVALUE_QUAL, b"&&")?;
-
-        Ok(())
+        write_one_qual(StorageClass::LVALUE_QUAL, b"&");
+        write_one_qual(StorageClass::RVALUE_QUAL, b"&&");
     }
 
     // Write the "second half" of a given type.
-    fn write_post(&mut self, t: &Type) -> Result<()> {
+    fn write_post(&mut self, t: &Type) {
         match *t {
             Type::MemberFunction(_, _, ref params, sc, ref return_type)
             | Type::NonMemberFunction(_, ref params, sc, ref return_type) => {
-                write!(self.w, "(")?;
-                self.write_types(&params.types)?;
-                write!(self.w, ")")?;
+                self.w.push(b'(');
+                self.write_types(&params.types);
+                self.w.push(b')');
 
-                self.write_memfn_qualifiers(sc)?;
-                self.write_post(return_type)?;
+                self.write_memfn_qualifiers(sc);
+                self.write_post(return_type);
             }
             Type::MemberFunctionPointer(_, _, _, ref params, sc, ref return_type) => {
-                write!(self.w, ")(")?;
-                self.write_types(&params.types)?;
-                write!(self.w, ")")?;
+                self.w.extend(b")(");
+                self.write_types(&params.types);
+                self.w.push(b')');
 
-                self.write_post(return_type)?;
+                self.write_post(return_type);
 
                 if sc.contains(StorageClass::CONST) {
-                    self.write_space()?;
-                    write!(self.w, "const")?;
+                    self.write_space();
+                    self.w.extend(b"const");
                 }
             }
             Type::CXXVBTable(ref names, _sc) => {
-                self.write_scope(names)?;
-                write!(self.w, "\'}}")?; // the rest of the "operator"
+                self.write_scope(names);
+                self.w.extend(b"\'}}"); // the rest of the "operator"
             }
             Type::Ptr(ref inner, _sc) | Type::Ref(ref inner, _sc) => {
                 match *inner.as_ref() {
                     Type::MemberFunction(_, _, _, _, _)
                     | Type::NonMemberFunction(_, _, _, _)
                     | Type::Array(_, _, _) => {
-                        write!(self.w, ")")?;
+                        self.w.push(b')');
                     }
                     _ => {}
                 }
-                self.write_post(inner)?;
+                self.write_post(inner);
             }
             Type::Array(len, ref inner, _sc) => {
-                write!(self.w, "[{}]", len)?;
-                self.write_post(inner)?;
+                self.w.push(b'[');
+                self.w.extend(itoa::Buffer::new().format(len).as_bytes());
+                self.w.push(b']');
+                self.write_post(inner);
             }
             Type::Var(ref inner, _kind, _sc) => {
-                self.write_post(inner)?;
+                self.write_post(inner);
             }
             Type::CXXVFTable(ref names, _) => {
                 if !names.names.is_empty() {
-                    write!(self.w, "{{for `")?;
-                    self.write_scope(names)?;
-                    self.w.write_all(b"'}")?;
+                    self.w.extend(b"{for `");
+                    self.write_scope(names);
+                    self.w.extend(b"'}");
                 }
             }
             Type::VCallThunk(offset, _) => {
-                write!(self.w, "{{{},", offset)?;
+                self.w.push(b'{');
+                self.w.extend(itoa::Buffer::new().format(offset).as_bytes());
+                self.w.push(b',');
                 if self.flags.contains(DemangleFlags::SPACE_AFTER_COMMA) {
-                    write!(self.w, " ")?;
+                    self.w.push(b' ');
                 }
-                write!(self.w, "{{flat}}}}")?;
+                self.w.extend(b"{flat}}");
             }
             _ => {}
         }
-        Ok(())
     }
 
     // Write a function or template parameter list.
-    fn write_types(&mut self, types: &[Type]) -> Result<()> {
+    fn write_types(&mut self, types: &[Type]) {
         for (idx, param) in types
             .iter()
             .filter(|x| **x != Type::EmptyParameterPack)
             .enumerate()
         {
             if idx > 0 {
-                write!(self.w, ",")?;
+                self.w.push(b',');
                 if self.flags.contains(DemangleFlags::SPACE_AFTER_COMMA) {
-                    write!(self.w, " ")?;
+                    self.w.push(b' ');
                 }
             }
-            self.write_pre(param)?;
-            self.write_post(param)?;
+            self.write_pre(param);
+            self.write_post(param);
         }
-        Ok(())
     }
 
-    fn write_class(&mut self, names: &Symbol, s: &str) -> Result<()> {
+    fn write_class(&mut self, names: &Symbol, s: &str) {
         if !self.flags.contains(DemangleFlags::NO_CLASS_TYPE) {
-            write!(self.w, "{}", s)?;
-            write!(self.w, " ")?;
+            self.w.extend(s.as_bytes());
+            self.w.push(b' ');
         }
-        self.write_name(names, None)?;
-        Ok(())
+        self.write_name(names, None);
     }
 
-    fn write_space_pre(&mut self) -> Result<()> {
+    fn write_space_pre(&mut self) {
         if let Some(&c) = self.w.last() {
             if char::from(c).is_ascii_alphabetic() || c == b'&' || c == b'>' || c == b')' {
-                write!(self.w, " ")?;
+                self.w.push(b' ');
             }
         }
-        Ok(())
     }
 
-    fn write_space_ptr(&mut self) -> Result<()> {
+    fn write_space_ptr(&mut self) {
         if let Some(&c) = self.w.last() {
             if char::from(c).is_ascii_alphabetic() || c == b'>' || c == b')' {
-                write!(self.w, " ")?;
+                self.w.push(b' ');
             }
         }
-        Ok(())
     }
 
-    fn write_space(&mut self) -> Result<()> {
+    fn write_space(&mut self) {
         if let Some(&c) = self.w.last() {
             if char::from(c).is_ascii_alphabetic()
                 || c == b'*'
@@ -2084,13 +2059,12 @@ impl<'a> Serializer<'a> {
                 || c == b'>'
                 || c == b')'
             {
-                write!(self.w, " ")?;
+                self.w.push(b' ');
             }
         }
-        Ok(())
     }
 
-    fn write_operator_name(&mut self, op: &Operator) -> Result<()> {
+    fn write_operator_name(&mut self, op: &Operator) {
         let s = match *op {
             Operator::Ctor => "ctor",
             Operator::Dtor => "dtor",
@@ -2144,11 +2118,13 @@ impl<'a> Serializer<'a> {
             Operator::VCall => "`vcall'",
             Operator::Typeof => "`typeof'",
             Operator::LocalStaticGuard(scope) => {
-                write!(self.w, "`local static guard'")?;
+                self.w.extend(b"`local static guard'");
                 if let Some(scope) = scope {
-                    write!(self.w, "{{{}}}", scope)?;
+                    self.w.push(b'{');
+                    self.w.extend(itoa::Buffer::new().format(scope).as_bytes());
+                    self.w.push(b'}');
                 }
-                return Ok(());
+                return;
             }
             Operator::String => "`string'",
             Operator::VBaseDtor => "`vbase destructor'",
@@ -2175,11 +2151,11 @@ impl<'a> Serializer<'a> {
             Operator::LiteralOperatorName => "operator \"\"",
 
             Operator::RTTITypeDescriptor(_, ref inner) => {
-                self.write_pre(inner)?;
+                self.write_pre(inner);
                 // XXX(mitsuhiko): llvm uses a space here instead of `::`.  No
                 // idea why, seems inconsistent
-                write!(self.w, "::`RTTI Type Descriptor'")?;
-                return Ok(());
+                self.w.extend(b"::`RTTI Type Descriptor'");
+                return;
             }
             Operator::RTTIBaseClassDescriptor(nv_offset, vbptr_offset, vbtable_offset, flags) => {
                 let sp = if self.flags.contains(DemangleFlags::SPACE_AFTER_COMMA) {
@@ -2187,12 +2163,14 @@ impl<'a> Serializer<'a> {
                 } else {
                     ""
                 };
-                write!(
-                    self.w,
-                    "`RTTI Base Class Descriptor at ({},{}{},{}{},{}{})'",
-                    nv_offset, sp, vbptr_offset, sp, vbtable_offset, sp, flags
-                )?;
-                return Ok(());
+                self.w.extend(
+                    format!(
+                        "`RTTI Base Class Descriptor at ({},{}{},{}{},{}{})'",
+                        nv_offset, sp, vbptr_offset, sp, vbtable_offset, sp, flags
+                    )
+                    .as_bytes(),
+                );
+                return;
             }
             Operator::RTTIBaseClassArray => "`RTTI Base Class Array'",
             Operator::RTTIClassHierarchyDescriptor => "`RTTI Class Hierarchy Descriptor'",
@@ -2201,171 +2179,172 @@ impl<'a> Serializer<'a> {
             Operator::DynamicInitializer => "`dynamic initializer'",
             Operator::DynamicAtexitDtor => "`dynamic atexit destructor'",
             Operator::LocalStaticThreadGuard(scope) => {
-                write!(self.w, "`local static thread guard'")?;
+                self.w.extend(b"`local static thread guard'");
                 if let Some(scope) = scope {
-                    write!(self.w, "{{{}}}", scope)?;
+                    self.w.push(b'{');
+                    self.w.extend(itoa::Buffer::new().format(scope).as_bytes());
+                    self.w.push(b'}');
                 }
-                return Ok(());
+                return;
             }
         };
-        write!(self.w, "{}", s)?;
-        Ok(())
+        self.w.extend(s.as_bytes());
     }
 
-    fn write_one_name(&mut self, name: &Name) -> Result<()> {
+    fn write_one_name(&mut self, name: &Name) {
         match *name {
             Name::Md5(name) => {
-                write!(self.w, "??@")?;
-                self.w.write_all(name)?;
-                write!(self.w, "@")?;
+                self.w.extend(b"??@");
+                self.w.extend(name);
+                self.w.push(b'@');
             }
             Name::Operator(ref op) => {
-                self.write_space()?;
-                self.write_operator_name(op)?;
+                self.write_space();
+                self.write_operator_name(op);
             }
             Name::NonTemplate(name) => {
-                self.w.write_all(name)?;
+                self.w.extend(name);
             }
             Name::AsInterface(name) => {
-                write!(self.w, "[")?;
-                self.w.write_all(name)?;
-                write!(self.w, "]")?;
+                self.w.push(b'[');
+                self.w.extend(name);
+                self.w.push(b']');
             }
             Name::Template(ref name, ref params) => {
-                self.write_one_name(name)?;
-                self.write_tmpl_params(params)?;
+                self.write_one_name(name);
+                self.write_tmpl_params(params);
             }
-            Name::Discriminator(ref val) => {
-                write!(self.w, "`{}'", val)?;
+            Name::Discriminator(val) => {
+                self.w.push(b'`');
+                self.w.extend(itoa::Buffer::new().format(val).as_bytes());
+                self.w.push(b'\'');
             }
             Name::ParsedName(ref val) => {
-                write!(self.w, "`{}'", serialize(val, self.flags)?)?;
+                self.w.push(b'`');
+                self.serialize(val);
+                self.w.push(b'\'');
             }
             Name::AnonymousNamespace(_) => {
-                write!(self.w, "`anonymous namespace'")?;
+                self.w.extend(b"`anonymous namespace'");
             }
         }
-        Ok(())
     }
 
-    fn write_scope(&mut self, names: &NameSequence) -> Result<()> {
+    fn write_scope(&mut self, names: &NameSequence) {
         // Print out namespaces or outer class names.
         let mut i = names.names.iter().rev();
         if let Some(name) = i.next() {
-            self.write_one_name(name)?;
+            self.write_one_name(name);
         }
         for name in i {
-            write!(self.w, "::")?;
-            self.write_one_name(name)?;
+            self.w.extend(b"::");
+            self.write_one_name(name);
         }
-        Ok(())
     }
 
     // Write a name read by read_name().
-    fn write_name(&mut self, names: &Symbol, ty: Option<&Type<'_>>) -> Result<()> {
+    fn write_name(&mut self, names: &Symbol, ty: Option<&Type<'_>>) {
         if !self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
-            self.write_space_pre()?;
+            self.write_space_pre();
         } else {
-            self.write_space_ptr()?;
+            self.write_space_ptr();
         }
 
         let mut was_literal_op = false;
         if let Name::Operator(Operator::LiteralOperatorName) = names.name {
-            self.write_space()?;
-            self.write_operator_name(&Operator::LiteralOperatorName)?;
+            self.write_space();
+            self.write_operator_name(&Operator::LiteralOperatorName);
             was_literal_op = true;
         }
 
-        self.write_scope(&names.scope)?;
+        self.write_scope(&names.scope);
 
         if !names.scope.names.is_empty() && !was_literal_op {
-            write!(self.w, "::")?;
+            self.w.extend(b"::");
         }
 
         match names.name {
             Name::Md5(name) => {
-                write!(self.w, "??@")?;
-                self.w.write_all(name)?;
-                write!(self.w, "@")?;
+                self.w.extend(b"??@");
+                self.w.extend(name);
+                self.w.push(b'@');
             }
             Name::Operator(ref op) => {
                 match *op {
                     Operator::Ctor => {
-                        let prev = names.scope.names.first().ok_or_else(|| {
-                            Error::new(
-                                "If there's a ctor, there should be another name in this sequence",
-                            )
-                        })?;
-                        self.write_one_name(prev)?;
+                        if let Some(prev) = names.scope.names.first() {
+                            self.write_one_name(prev);
+                        } else {
+                            self.w.extend(b"[invalid]");
+                        }
                     }
                     Operator::Dtor => {
-                        let prev = names.scope.names.first().ok_or_else(|| {
-                            Error::new(
-                                "If there's a dtor, there should be another name in this sequence",
-                            )
-                        })?;
-                        write!(self.w, "~")?;
-                        self.write_one_name(prev)?;
+                        if let Some(prev) = names.scope.names.first() {
+                            self.w.push(b'~');
+                            self.write_one_name(prev);
+                        } else {
+                            self.w.extend(b"[invalid]");
+                        }
                     }
                     Operator::VBTable => {
-                        write!(self.w, "`vbtable'{{for `")?;
+                        self.w.extend(b"`vbtable'{for `");
                         // The rest will be written by write_post of the
                         // symbol type.
                     }
                     Operator::Conversion => {
                         if let Some(Type::MemberFunction(_, _, _, _, ref rv)) = ty {
-                            write!(self.w, "operator ")?;
-                            self.write_pre(rv)?;
-                            self.write_post(rv)?;
+                            self.w.extend(b"operator ");
+                            self.write_pre(rv);
+                            self.write_post(rv);
                         } else {
-                            self.write_space()?;
-                            self.write_operator_name(op)?;
+                            self.write_space();
+                            self.write_operator_name(op);
                         }
                     }
                     Operator::LiteralOperatorName => {}
                     _ => {
-                        self.write_space()?;
+                        self.write_space();
                         // Print out an overloaded operator.
-                        self.write_operator_name(op)?;
+                        self.write_operator_name(op);
                     }
                 }
             }
             Name::NonTemplate(name) => {
-                self.w.write_all(name)?;
+                self.w.extend(name);
             }
             Name::AsInterface(name) => {
-                write!(self.w, "[")?;
-                self.w.write_all(name)?;
-                write!(self.w, "]")?;
+                self.w.push(b'[');
+                self.w.extend(name);
+                self.w.push(b']');
             }
             Name::Template(ref name, ref params) => {
-                self.write_one_name(name)?;
-                self.write_tmpl_params(params)?;
+                self.write_one_name(name);
+                self.write_tmpl_params(params);
             }
-            Name::Discriminator(ref val) => {
-                write!(self.w, "`{}'", val)?;
+            Name::Discriminator(val) => {
+                self.w.push(b'`');
+                self.w.extend(itoa::Buffer::new().format(val).as_bytes());
+                self.w.push(b'\'');
             }
             Name::ParsedName(ref val) => {
-                write!(self.w, "{}", serialize(val, self.flags)?)?;
+                self.serialize(val);
             }
             Name::AnonymousNamespace(_) => {
                 // this should never happen as they are handled elsewhere
                 debug_assert!(false, "not supposed to be here");
             }
         }
-        Ok(())
     }
 
-    fn write_tmpl_params(&mut self, params: &Params<'_>) -> Result<()> {
-        write!(self.w, "<")?;
+    fn write_tmpl_params(&mut self, params: &Params<'_>) {
+        self.w.push(b'<');
         if !params.types.is_empty() {
-            self.write_types(&params.types)?;
+            self.write_types(&params.types);
             if let Some(&b'>') = self.w.last() {
-                write!(self.w, " ")?;
+                self.w.push(b' ');
             }
         }
-        write!(self.w, ">")?;
-        Ok(())
+        self.w.push(b'>');
     }
 }
 

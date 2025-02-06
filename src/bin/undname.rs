@@ -29,13 +29,7 @@ fn main() {
         }
         let flags = msvc_demangler::DemangleFlags::llvm();
         let demangled = msvc_demangler::serialize(&parsed, flags);
-        match demangled {
-            Ok(ref string) => println!("{}", string),
-            Err(err) => {
-                eprintln!("error: {}", err);
-                println!("{}", sym);
-            }
-        }
+        println!("{}", demangled);
     };
 
     if args.is_empty() {
