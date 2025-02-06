@@ -1591,7 +1591,7 @@ impl Serializer<'_> {
     fn write_calling_conv(&mut self, calling_conv: &CallingConv) {
         match self.w.last() {
             Some(b' ') | Some(b'(') => {}
-            _ => self.w.extend(b" "),
+            _ => self.w.push(b' '),
         }
         if !self.flags.contains(DemangleFlags::NO_MS_KEYWORDS) {
             match calling_conv {
@@ -1651,7 +1651,7 @@ impl Serializer<'_> {
             Type::MemberFunctionPointer(ref symbol, _, calling_conv, _, _, ref inner) => {
                 self.write_pre(inner);
                 self.write_space();
-                self.w.extend(b"(");
+                self.w.push(b'(');
                 self.write_calling_conv(calling_conv);
                 self.write_space();
                 self.write_space();
@@ -1672,25 +1672,24 @@ impl Serializer<'_> {
             Type::CXXVBTable(_, sc) => sc,
             Type::CXXVFTable(_, sc) => sc,
             Type::TemplateParameterWithIndex(n) => {
-                self.w
-                    .extend(format!("`template-parameter{}'", n).as_bytes());
+                self.w.extend(b"`template-parameter");
+                self.w.extend(itoa::Buffer::new().format(*n).as_bytes());
+                self.w.push(b'\'');
                 return;
             }
             Type::ThreadSafeStaticGuard(num) => {
-                self.w.extend(format!("TSS{}", num).as_bytes());
+                self.w.extend(b"TSS");
+                self.w.extend(itoa::Buffer::new().format(*num).as_bytes());
                 return;
             }
             Type::Constant(n) => {
-                self.w.extend(format!("{}", n).as_bytes());
+                self.w.extend(itoa::Buffer::new().format(*n).as_bytes());
                 return;
             }
             Type::ConstantString(_) => {
                 // We have no idea what the original encoding of the string is,
                 // and undname doesn't even try to display anything.
-                //match str::from_utf8(s).ok() {
-                //  Some(ref s) => self.w.extend(format!("{}", s).as_bytes()),
-                //  None => {},
-                //}
+                //self.w.extend(s);
                 return;
             }
             Type::VarArgs => {
@@ -1709,13 +1708,13 @@ impl Serializer<'_> {
                     | Type::NonMemberFunction(calling_conv, _, _, ref inner) => {
                         self.write_pre(inner);
                         self.write_space();
-                        self.w.extend(b"(");
+                        self.w.push(b'(');
                         self.write_calling_conv(&calling_conv);
                     }
                     Type::Array(_, _, _) => {
                         self.write_pre(inner);
                         self.write_space();
-                        self.w.extend(b"(");
+                        self.w.push(b'(');
                     }
                     _ => {
                         self.write_pre(inner);
@@ -1729,7 +1728,7 @@ impl Serializer<'_> {
                         } else if self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
                             self.write_space_ptr();
                         }
-                        self.w.extend(b"*")
+                        self.w.push(b'*')
                     }
                     Type::Ref(_, _) => {
                         if !self.flags.contains(DemangleFlags::HUG_TYPE) {
@@ -1737,7 +1736,7 @@ impl Serializer<'_> {
                         } else if self.flags.contains(DemangleFlags::SPACE_BEFORE_POINTER) {
                             self.write_space_ptr();
                         }
-                        self.w.extend(b"&")
+                        self.w.push(b'&')
                     }
                     Type::RValueRef(_, _) => {
                         if !self.flags.contains(DemangleFlags::HUG_TYPE) {
@@ -1947,9 +1946,9 @@ impl Serializer<'_> {
         match *t {
             Type::MemberFunction(_, _, ref params, sc, ref return_type)
             | Type::NonMemberFunction(_, ref params, sc, ref return_type) => {
-                self.w.extend(b"(");
+                self.w.push(b'(');
                 self.write_types(&params.types);
-                self.w.extend(b")");
+                self.w.push(b')');
 
                 self.write_memfn_qualifiers(sc);
                 self.write_post(return_type);
@@ -1957,7 +1956,7 @@ impl Serializer<'_> {
             Type::MemberFunctionPointer(_, _, _, ref params, sc, ref return_type) => {
                 self.w.extend(b")(");
                 self.write_types(&params.types);
-                self.w.extend(b")");
+                self.w.push(b')');
 
                 self.write_post(return_type);
 
@@ -1975,14 +1974,16 @@ impl Serializer<'_> {
                     Type::MemberFunction(_, _, _, _, _)
                     | Type::NonMemberFunction(_, _, _, _)
                     | Type::Array(_, _, _) => {
-                        self.w.extend(b")");
+                        self.w.push(b')');
                     }
                     _ => {}
                 }
                 self.write_post(inner);
             }
             Type::Array(len, ref inner, _sc) => {
-                self.w.extend(format!("[{}]", len).as_bytes());
+                self.w.push(b'[');
+                self.w.extend(itoa::Buffer::new().format(len).as_bytes());
+                self.w.push(b']');
                 self.write_post(inner);
             }
             Type::Var(ref inner, _kind, _sc) => {
@@ -1996,9 +1997,11 @@ impl Serializer<'_> {
                 }
             }
             Type::VCallThunk(offset, _) => {
-                self.w.extend(format!("{{{},", offset).as_bytes());
+                self.w.push(b'{');
+                self.w.extend(itoa::Buffer::new().format(offset).as_bytes());
+                self.w.push(b',');
                 if self.flags.contains(DemangleFlags::SPACE_AFTER_COMMA) {
-                    self.w.extend(b" ");
+                    self.w.push(b' ');
                 }
                 self.w.extend(b"{flat}}");
             }
@@ -2014,9 +2017,9 @@ impl Serializer<'_> {
             .enumerate()
         {
             if idx > 0 {
-                self.w.extend(b",");
+                self.w.push(b',');
                 if self.flags.contains(DemangleFlags::SPACE_AFTER_COMMA) {
-                    self.w.extend(b" ");
+                    self.w.push(b' ');
                 }
             }
             self.write_pre(param);
@@ -2027,7 +2030,7 @@ impl Serializer<'_> {
     fn write_class(&mut self, names: &Symbol, s: &str) {
         if !self.flags.contains(DemangleFlags::NO_CLASS_TYPE) {
             self.w.extend(s.as_bytes());
-            self.w.extend(b" ");
+            self.w.push(b' ');
         }
         self.write_name(names, None);
     }
@@ -2035,7 +2038,7 @@ impl Serializer<'_> {
     fn write_space_pre(&mut self) {
         if let Some(&c) = self.w.last() {
             if char::from(c).is_ascii_alphabetic() || c == b'&' || c == b'>' || c == b')' {
-                self.w.extend(b" ");
+                self.w.push(b' ');
             }
         }
     }
@@ -2043,7 +2046,7 @@ impl Serializer<'_> {
     fn write_space_ptr(&mut self) {
         if let Some(&c) = self.w.last() {
             if char::from(c).is_ascii_alphabetic() || c == b'>' || c == b')' {
-                self.w.extend(b" ");
+                self.w.push(b' ');
             }
         }
     }
@@ -2056,7 +2059,7 @@ impl Serializer<'_> {
                 || c == b'>'
                 || c == b')'
             {
-                self.w.extend(b" ");
+                self.w.push(b' ');
             }
         }
     }
@@ -2117,7 +2120,9 @@ impl Serializer<'_> {
             Operator::LocalStaticGuard(scope) => {
                 self.w.extend(b"`local static guard'");
                 if let Some(scope) = scope {
-                    self.w.extend(format!("{{{}}}", scope).as_bytes());
+                    self.w.push(b'{');
+                    self.w.extend(itoa::Buffer::new().format(scope).as_bytes());
+                    self.w.push(b'}');
                 }
                 return;
             }
@@ -2176,7 +2181,9 @@ impl Serializer<'_> {
             Operator::LocalStaticThreadGuard(scope) => {
                 self.w.extend(b"`local static thread guard'");
                 if let Some(scope) = scope {
-                    self.w.extend(format!("{{{}}}", scope).as_bytes());
+                    self.w.push(b'{');
+                    self.w.extend(itoa::Buffer::new().format(scope).as_bytes());
+                    self.w.push(b'}');
                 }
                 return;
             }
@@ -2189,7 +2196,7 @@ impl Serializer<'_> {
             Name::Md5(name) => {
                 self.w.extend(b"??@");
                 self.w.extend(name);
-                self.w.extend(b"@");
+                self.w.push(b'@');
             }
             Name::Operator(ref op) => {
                 self.write_space();
@@ -2199,20 +2206,23 @@ impl Serializer<'_> {
                 self.w.extend(name);
             }
             Name::AsInterface(name) => {
-                self.w.extend(b"[");
+                self.w.push(b'[');
                 self.w.extend(name);
-                self.w.extend(b"]");
+                self.w.push(b']');
             }
             Name::Template(ref name, ref params) => {
                 self.write_one_name(name);
                 self.write_tmpl_params(params);
             }
-            Name::Discriminator(ref val) => {
-                self.w.extend(format!("`{}'", val).as_bytes());
+            Name::Discriminator(val) => {
+                self.w.push(b'`');
+                self.w.extend(itoa::Buffer::new().format(val).as_bytes());
+                self.w.push(b'\'');
             }
             Name::ParsedName(ref val) => {
-                self.w
-                    .extend(format!("`{}'", serialize(val, self.flags)).as_bytes());
+                self.w.push(b'`');
+                self.serialize(val);
+                self.w.push(b'\'');
             }
             Name::AnonymousNamespace(_) => {
                 self.w.extend(b"`anonymous namespace'");
@@ -2257,7 +2267,7 @@ impl Serializer<'_> {
             Name::Md5(name) => {
                 self.w.extend(b"??@");
                 self.w.extend(name);
-                self.w.extend(b"@");
+                self.w.push(b'@');
             }
             Name::Operator(ref op) => {
                 match *op {
@@ -2270,7 +2280,7 @@ impl Serializer<'_> {
                     }
                     Operator::Dtor => {
                         if let Some(prev) = names.scope.names.first() {
-                            self.w.extend(b"~");
+                            self.w.push(b'~');
                             self.write_one_name(prev);
                         } else {
                             self.w.extend(b"[invalid]");
@@ -2303,19 +2313,21 @@ impl Serializer<'_> {
                 self.w.extend(name);
             }
             Name::AsInterface(name) => {
-                self.w.extend(b"[");
+                self.w.push(b'[');
                 self.w.extend(name);
-                self.w.extend(b"]");
+                self.w.push(b']');
             }
             Name::Template(ref name, ref params) => {
                 self.write_one_name(name);
                 self.write_tmpl_params(params);
             }
-            Name::Discriminator(ref val) => {
-                self.w.extend(format!("`{}'", val).as_bytes());
+            Name::Discriminator(val) => {
+                self.w.push(b'`');
+                self.w.extend(itoa::Buffer::new().format(val).as_bytes());
+                self.w.push(b'\'');
             }
             Name::ParsedName(ref val) => {
-                self.w.extend(serialize(val, self.flags).as_bytes());
+                self.serialize(val);
             }
             Name::AnonymousNamespace(_) => {
                 // this should never happen as they are handled elsewhere
@@ -2325,14 +2337,14 @@ impl Serializer<'_> {
     }
 
     fn write_tmpl_params(&mut self, params: &Params<'_>) {
-        self.w.extend(b"<");
+        self.w.push(b'<');
         if !params.types.is_empty() {
             self.write_types(&params.types);
             if let Some(&b'>') = self.w.last() {
-                self.w.extend(b" ");
+                self.w.push(b' ');
             }
         }
-        self.w.extend(b">");
+        self.w.push(b'>');
     }
 }
 

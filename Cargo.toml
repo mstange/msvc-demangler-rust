@@ -13,6 +13,7 @@ categories = ["no-std"]
 
 [dependencies]
 bitflags = { version = "2", default-features = false }
+itoa = "1.0"
 
 [[bin]]
 name = "undname"
